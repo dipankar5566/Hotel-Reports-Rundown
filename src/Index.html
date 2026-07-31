@@ -1,0 +1,706 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hotel P&amp;L — Dream &amp; Paradise</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg: #f4f6fa; --card: #ffffff; --ink: #1c2434; --muted: #6b7688;
+      --line: #e4e8f0; --green: #16a34a; --red: #dc2626; --blue: #2563eb;
+      --amber: #d97706;
+      --dream: #6366f1; --paradise: #0d9488;
+    }
+    * { box-sizing: border-box; margin: 0; }
+    body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--ink); padding: 12px; }
+    .wrap { max-width: 1080px; margin: 0 auto; }
+    header { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+    h1 { font-size: 20px; }
+    .sub { color: var(--muted); font-size: 12px; }
+    button.refresh { margin-left: auto; border: 1px solid var(--line); background: var(--card); border-radius: 8px; padding: 7px 14px; font-size: 13px; cursor: pointer; }
+    .filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; align-items: center; }
+    .chip { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 6px 14px; font-size: 13px; cursor: pointer; user-select: none; }
+    .chip.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+    select { border: 1px solid var(--line); background: var(--card); border-radius: 8px; padding: 6px 10px; font-size: 13px; }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+    .card .lbl { font-size: 12px; color: var(--muted); }
+    .card .val { font-size: 21px; font-weight: 700; margin-top: 3px; }
+    .card .mom { font-size: 11px; margin-top: 3px; }
+    .pos { color: var(--green); } .neg { color: var(--red); }
+    .panel { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin-bottom: 14px; min-width: 0; }
+    .panel h2 { font-size: 14px; margin-bottom: 10px; color: var(--ink); }
+    .chartbox { position: relative; width: 100%; overflow: hidden; }
+    .chartbox canvas { max-width: 100%; }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    @media (max-width: 760px) { .grid2 { grid-template-columns: 1fr; } }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { padding: 7px 8px; text-align: right; border-bottom: 1px solid var(--line); white-space: nowrap; }
+    th:first-child, td:first-child { text-align: left; }
+    th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; }
+    .tablewrap { overflow-x: auto; }
+    .netpos { color: var(--green); font-weight: 700; } .netneg { color: var(--red); font-weight: 700; }
+    details summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+    .flag { font-size: 12px; color: var(--muted); padding: 3px 0; border-bottom: 1px dashed var(--line); }
+    .aiSummaryBox { font-size: 13px; line-height: 1.5; padding: 10px 12px; background: var(--bg); border-radius: 8px; margin-bottom: 10px; }
+    .anomaly { font-size: 12px; padding: 6px 8px; border-left: 3px solid var(--muted); border-bottom: 1px dashed var(--line); margin-bottom: 2px; }
+    .anomaly .av { font-weight: 600; }
+    .anomaly.sev-low { border-left-color: var(--green); }
+    .anomaly.sev-medium { border-left-color: var(--amber); }
+    .anomaly.sev-high { border-left-color: var(--red); }
+    #loading { text-align: center; padding: 60px 0; color: var(--muted); }
+    .spin { display: inline-block; width: 26px; height: 26px; border: 3px solid var(--line); border-top-color: var(--blue); border-radius: 50%; animation: sp 0.9s linear infinite; margin-bottom: 10px; }
+    @keyframes sp { to { transform: rotate(360deg); } }
+    .err { background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; border-radius: 10px; padding: 10px 14px; font-size: 13px; margin-bottom: 14px; }
+    .note { font-size: 11px; color: var(--muted); margin-top: 8px; }
+    .begrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 12px; }
+    .lbl2 { font-size: 11px; color: var(--muted); }
+    .v2 { font-size: 17px; font-weight: 700; margin-top: 2px; }
+    .bebar { position: relative; height: 22px; background: var(--line); border-radius: 11px; overflow: hidden; margin-top: 6px; }
+    .bebar-actual { position: absolute; left: 0; top: 0; bottom: 0; background: var(--green); border-radius: 11px; opacity: .85; }
+    .bebar-need { position: absolute; top: -2px; bottom: -2px; width: 3px; background: #475569; z-index: 2; }
+    .statrow { display: flex; justify-content: space-between; font-size: 13px; padding: 5px 0; border-bottom: 1px dashed var(--line); }
+    .statrow .sv { font-weight: 600; }
+    #catDrill { max-height: 260px; overflow-y: auto; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+    .drillhead { display: flex; justify-content: space-between; align-items: center; font-size: 13px; font-weight: 700; margin-bottom: 6px; }
+    .drillclose { cursor: pointer; color: var(--muted); font-weight: 400; font-size: 12px; }
+    .drillrow { display: flex; justify-content: space-between; gap: 10px; font-size: 12.5px; padding: 4px 0; border-bottom: 1px dashed var(--line); }
+    .drillrow span:first-child { overflow-wrap: anywhere; }
+    .drillrow .dv { font-weight: 600; white-space: nowrap; }
+    .drilldate { display: inline-block; min-width: 44px; color: var(--muted); font-variant-numeric: tabular-nums; margin-right: 4px; }
+    .drilltag { display: inline-block; font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 999px; background: var(--line); color: var(--muted); margin-right: 4px; vertical-align: 1px; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>🏨 Hotel P&amp;L</h1>
+    <span class="sub" id="stamp"></span>
+    <button class="refresh" onclick="load(true)">⟳ Refresh</button>
+  </header>
+
+  <div id="loading"><div class="spin"></div><div>Reading the books…</div></div>
+
+  <div id="app" style="display:none">
+    <div id="errbox"></div>
+    <div class="filters">
+      <span class="chip" data-h="Both">Both</span>
+      <span class="chip" data-h="Dream">Dream</span>
+      <span class="chip" data-h="Paradise">Paradise</span>
+      <select id="monthSel"></select>
+    </div>
+
+    <div class="cards">
+      <div class="card"><div class="lbl">Revenue</div><div class="val" id="kRev"></div><div class="mom" id="kRevM"></div></div>
+      <div class="card"><div class="lbl">Total Cost</div><div class="val" id="kExp"></div><div class="mom" id="kExpM"></div></div>
+      <div class="card"><div class="lbl">Net P&amp;L</div><div class="val" id="kNet"></div><div class="mom" id="kNetM"></div></div>
+      <div class="card"><div class="lbl">Room Nights</div><div class="val" id="kNights"></div><div class="mom" id="kNightsM"></div></div>
+    </div>
+    <div class="cards">
+      <div class="card"><div class="lbl">Occupancy</div><div class="val" id="kOcc"></div><div class="mom" id="kOccM"></div></div>
+      <div class="card"><div class="lbl">Avg Room Rate (ADR)</div><div class="val" id="kAdr"></div><div class="mom" id="kAdrM"></div></div>
+      <div class="card"><div class="lbl">RevPAR</div><div class="val" id="kRevpar"></div><div class="mom" id="kRevparM"></div></div>
+      <div class="card"><div class="lbl">Cash Share of Collections</div><div class="val" id="kCash"></div><div class="mom" id="kCashM"></div></div>
+    </div>
+
+    <div class="panel" id="aiPanel">
+      <h2>AI Analysis</h2>
+      <button class="refresh" id="aiRunBtn" onclick="runAiAnalysisClick()" style="margin:0 0 10px">✨ Run AI Analysis</button>
+      <div class="note">Uses OpenAI to summarize the currently selected hotel/month and flag possible mistakes in the expense entries. Each click has a small real cost — it only runs when you click it, never automatically.</div>
+      <div id="aiResult" style="margin-top:10px"></div>
+    </div>
+
+    <div class="panel" id="bePanel">
+      <h2 id="beTitle">Break-even</h2>
+      <div id="beStatus" style="font-size:16px;font-weight:700;margin-bottom:10px"></div>
+      <div class="begrid">
+        <div><div class="lbl2">Monthly cost base</div><div class="v2" id="beCost"></div><div class="note" id="beCostNote"></div></div>
+        <div><div class="lbl2">Needed daily revenue</div><div class="v2" id="beDailyNeed"></div><div class="note" id="beDailyActual"></div></div>
+        <div><div class="lbl2">Needed occupancy at current rate</div><div class="v2" id="beOccNeed"></div><div class="note" id="beOccActual"></div></div>
+        <div><div class="lbl2">Margin of safety</div><div class="v2" id="beMargin"></div><div class="note">how far revenue can fall before losses</div></div>
+      </div>
+      <div class="bebar"><div id="beBarNeed" class="bebar-need"></div><div id="beBarActual" class="bebar-actual"></div></div>
+      <div class="note">Occupancy: needed (grey marker) vs actual (colored bar). Cost base = recorded expenses + ₹50,000/month staff salary per hotel (prorated for the running month) + for Dream only, an assumed 40% of food revenue for unbooked in-house kitchen/ingredient cost.</div>
+    </div>
+
+    <div class="panel">
+      <h2>Monthly trend — revenue, expenses &amp; net</h2>
+      <div class="chartbox" style="height:260px"><canvas id="cMonthly"></canvas></div>
+    </div>
+
+    <div class="panel">
+      <h2 id="dailyTitle">Daily trend</h2>
+      <div class="chartbox" style="height:240px"><canvas id="cDaily"></canvas></div>
+    </div>
+
+    <div class="grid2">
+      <div class="panel">
+        <h2 id="expTitle">Expenses by category</h2>
+        <div class="chartbox" style="height:260px"><canvas id="cCats"></canvas></div>
+        <div class="note" id="catHint">Tap a slice (or legend item) to see the line items.</div>
+        <div id="catDrill" style="display:none">
+          <div class="drillhead">
+            <span id="catDrillTitle"></span>
+            <span class="drillclose" onclick="hideCatDrill()">✕ close</span>
+          </div>
+          <div id="catDrillList"></div>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>Revenue mix</h2>
+        <div class="chartbox" style="height:260px"><canvas id="cMix"></canvas></div>
+        <div class="note">Room vs food revenue, and room revenue by booking source.</div>
+      </div>
+    </div>
+
+    <div class="grid2">
+      <div class="panel">
+        <h2 id="moneyTitle">Money control</h2>
+        <div class="chartbox" style="height:170px"><canvas id="cCashBank"></canvas></div>
+        <div id="moneyStats"></div>
+      </div>
+      <div class="panel">
+        <h2 id="foodTitle">Food business</h2>
+        <div class="chartbox" style="height:170px"><canvas id="cFood"></canvas></div>
+        <div id="foodStats"></div>
+        <div class="note" id="foodCostNote"></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Year-over-year revenue</h2>
+      <div class="chartbox" style="height:240px"><canvas id="cYoY"></canvas></div>
+    </div>
+
+    <div class="panel">
+      <h2>Monthly P&amp;L statement</h2>
+      <div class="tablewrap"><table id="plTable"></table></div>
+      <div class="note">Exp = book expenses (incl. GST-payable and owner-savings provisions). Salary = ₹50,000/month staff cost per hotel, not in the books (prorated for the running month). Food Cost = for Dream only, an assumed 40% of food revenue for unbooked in-house kitchen/ingredient cost (owner estimate, additive on top of any real food-related expense already in Exp); always ₹0 for Paradise. Net = Rev − Exp − Salary − Food Cost. Months before Nov 25 show Dream's rooms only, with no expense records.</div>
+    </div>
+
+    <div class="panel">
+      <details>
+        <summary id="flagSummary">Data-quality flags</summary>
+        <div id="flags" style="margin-top:8px"></div>
+      </details>
+    </div>
+  </div>
+</div>
+
+<script>
+var DATA = null;
+var scope = 'Both';
+var selYM = null;
+var charts = {};
+var CURRENT_MONTH = null;
+var PREV_MONTH = null;
+var catClickMap = {};
+
+var HCOLOR = { Dream: '#6366f1', Paradise: '#0d9488' };
+var MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+function inr(n) {
+  var neg = n < 0;
+  var s = Math.round(Math.abs(n)).toLocaleString('en-IN');
+  return (neg ? '-₹' : '₹') + s;
+}
+function ymLabel(ym) {
+  var p = ym.split('-');
+  return MON[Number(p[1]) - 1] + ' ' + p[0].slice(2);
+}
+function isCurrentMonth(ym) {
+  var now = new Date();
+  return ym === now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
+}
+function ymOption(ym) {
+  return ymLabel(ym) + (isCurrentMonth(ym) ? ' (MTD)' : '');
+}
+
+function load(force) {
+  document.getElementById('loading').style.display = 'block';
+  document.getElementById('app').style.display = 'none';
+  google.script.run
+    .withSuccessHandler(function (json) {
+      DATA = JSON.parse(json);
+      init();
+    })
+    .withFailureHandler(function (e) {
+      document.getElementById('loading').innerHTML =
+        '<div class="err">Failed to load: ' + e.message + '</div>';
+    })
+    .getDashboardData(!!force);
+}
+
+function monthsInScope() {
+  var byYM = {};
+  DATA.months.forEach(function (m) {
+    if (scope !== 'Both' && m.hotel !== scope) return;
+    if (!byYM[m.ym]) {
+      byYM[m.ym] = { ym: m.ym, revenue: 0, rent: 0, food: 0, expense: 0, net: 0,
+                     roomNights: 0, cashIn: 0, bankIn: 0, gst: 0,
+                     salary: 0, foodCost: 0, totalCost: 0, rooms: 0, daysElapsed: 0, daysInMonth: 0,
+                     dueTotal: 0, discountTotal: 0,
+                     expByCat: {}, expByCatRows: {}, rentBySource: {}, days: {}, hotels: [] };
+    }
+    var t = byYM[m.ym];
+    t.revenue += m.revenue; t.rent += m.rent; t.food += m.food;
+    t.expense += m.expense; t.net += m.net; t.roomNights += m.roomNights;
+    t.cashIn += m.cashIn; t.bankIn += m.bankIn; t.gst += m.gst;
+    t.salary += m.salary || 0; t.foodCost += m.foodCost || 0; t.totalCost += m.totalCost || 0;
+    t.rooms += m.rooms || 0;
+    t.daysElapsed = Math.max(t.daysElapsed, m.daysElapsed || 0);
+    t.daysInMonth = Math.max(t.daysInMonth, m.daysInMonth || 0);
+    t.dueTotal += m.dueTotal || 0; t.discountTotal += m.discountTotal || 0;
+    t.hotels.push(m);
+    var k;
+    for (k in m.expByCat) t.expByCat[k] = (t.expByCat[k] || 0) + m.expByCat[k];
+    for (k in m.expByCatRows) {
+      if (!t.expByCatRows[k]) t.expByCatRows[k] = [];
+      t.expByCatRows[k] = t.expByCatRows[k].concat(m.expByCatRows[k]);
+    }
+    for (k in m.rentBySource) t.rentBySource[k] = (t.rentBySource[k] || 0) + m.rentBySource[k];
+    for (k in m.days) {
+      if (!t.days[k]) t.days[k] = { rev: 0, exp: 0 };
+      t.days[k].rev += m.days[k].rev;
+      t.days[k].exp += m.days[k].exp;
+    }
+  });
+  return Object.keys(byYM).sort().map(function (ym) {
+    var t = byYM[ym];
+    var avail = t.rooms * t.daysElapsed;
+    t.occupancy = avail > 0 ? t.roomNights / avail : 0;
+    t.adr = t.roomNights > 0 ? t.rent / t.roomNights : 0;
+    t.revpar = avail > 0 ? t.rent / avail : 0;
+    return t;
+  });
+}
+function pct(x) { return (x * 100).toFixed(1) + '%'; }
+
+function init() {
+  document.getElementById('loading').style.display = 'none';
+  document.getElementById('app').style.display = 'block';
+  document.getElementById('stamp').textContent =
+    'updated ' + new Date(DATA.generatedAt).toLocaleString('en-IN');
+  document.getElementById('errbox').innerHTML = (DATA.errors || [])
+    .map(function (e) { return '<div class="err">' + e + '</div>'; }).join('');
+
+  document.querySelectorAll('.chip').forEach(function (ch) {
+    ch.classList.toggle('on', ch.dataset.h === scope);
+    ch.onclick = function () {
+      scope = ch.dataset.h;
+      document.querySelectorAll('.chip').forEach(function (c) {
+        c.classList.toggle('on', c.dataset.h === scope);
+      });
+      render();
+    };
+  });
+
+  var months = monthsInScope();
+  var sel = document.getElementById('monthSel');
+  sel.innerHTML = months.slice().reverse().map(function (m) {
+    return '<option value="' + m.ym + '">' + ymOption(m.ym) + '</option>';
+  }).join('');
+  if (!selYM || !months.some(function (m) { return m.ym === selYM; })) {
+    selYM = months.length ? months[months.length - 1].ym : null;
+  }
+  sel.value = selYM;
+  sel.onchange = function () { selYM = sel.value; render(); };
+
+  render();
+}
+
+function mom(el, cur, prev, invert) {
+  if (isCurrentMonth(selYM)) { el.textContent = 'month to date'; el.className = 'mom'; return; }
+  if (prev === undefined || prev === null || prev === 0) { el.textContent = ''; return; }
+  var pct = (cur - prev) / Math.abs(prev) * 100;
+  var good = invert ? pct < 0 : pct > 0;
+  el.textContent = (pct >= 0 ? '▲ ' : '▼ ') + Math.abs(pct).toFixed(1) + '% vs prev month';
+  el.className = 'mom ' + (good ? 'pos' : 'neg');
+}
+
+function render() {
+  var months = monthsInScope();
+  // keep month selector in sync with scope
+  var sel = document.getElementById('monthSel');
+  sel.innerHTML = months.slice().reverse().map(function (m) {
+    return '<option value="' + m.ym + '">' + ymOption(m.ym) + '</option>';
+  }).join('');
+  if (!months.some(function (m) { return m.ym === selYM; })) {
+    selYM = months.length ? months[months.length - 1].ym : null;
+  }
+  sel.value = selYM;
+
+  var idx = months.findIndex(function (m) { return m.ym === selYM; });
+  var cur = months[idx] || null;
+  var prev = idx > 0 ? months[idx - 1] : null;
+  if (!cur) return;
+  CURRENT_MONTH = cur;
+  PREV_MONTH = prev;
+
+  document.getElementById('kRev').textContent = inr(cur.revenue);
+  document.getElementById('kExp').textContent = inr(cur.totalCost);
+  var net = document.getElementById('kNet');
+  net.textContent = inr(cur.net);
+  net.className = 'val ' + (cur.net >= 0 ? 'pos' : 'neg');
+  document.getElementById('kNights').textContent = cur.roomNights.toLocaleString('en-IN');
+  mom(document.getElementById('kRevM'), cur.revenue, prev && prev.revenue);
+  mom(document.getElementById('kExpM'), cur.totalCost, prev && prev.totalCost, true);
+  mom(document.getElementById('kNetM'), cur.net, prev && prev.net);
+  mom(document.getElementById('kNightsM'), cur.roomNights, prev && prev.roomNights);
+
+  document.getElementById('kOcc').textContent = pct(cur.occupancy);
+  document.getElementById('kAdr').textContent = inr(cur.adr);
+  document.getElementById('kRevpar').textContent = inr(cur.revpar);
+  var coll = cur.cashIn + cur.bankIn;
+  document.getElementById('kCash').textContent = coll > 0 ? pct(cur.cashIn / coll) : '—';
+  mom(document.getElementById('kOccM'), cur.occupancy, prev && prev.occupancy);
+  mom(document.getElementById('kAdrM'), cur.adr, prev && prev.adr);
+  mom(document.getElementById('kRevparM'), cur.revpar, prev && prev.revpar);
+  document.getElementById('kCashM').textContent = coll > 0 ? inr(cur.cashIn) + ' cash · ' + inr(cur.bankIn) + ' bank' : '';
+  document.getElementById('kCashM').className = 'mom';
+
+  drawBreakeven(cur);
+  drawMonthly(months);
+  drawDaily(cur);
+  drawCats(cur);
+  drawMix(cur);
+  drawMoney(cur);
+  drawFood(cur);
+  drawYoY(months);
+  drawTable();
+  drawFlags();
+}
+
+function mkChart(id, cfg) {
+  if (charts[id]) charts[id].destroy();
+  charts[id] = new Chart(document.getElementById(id), cfg);
+}
+
+function drawBreakeven(cur) {
+  document.getElementById('beTitle').textContent = 'Break-even — ' + ymLabel(cur.ym);
+  var st = document.getElementById('beStatus');
+  if (cur.net >= 0) {
+    st.textContent = '✔ Above break-even by ' + inr(cur.net);
+    st.className = 'pos';
+  } else {
+    st.textContent = '✘ Below break-even by ' + inr(-cur.net);
+    st.className = 'neg';
+  }
+  document.getElementById('beCost').textContent = inr(cur.totalCost);
+  document.getElementById('beCostNote').textContent =
+    inr(cur.expense) + ' expenses + ' + inr(cur.salary) + ' salary' +
+    (cur.foodCost > 0 ? ' + ' + inr(cur.foodCost) + ' assumed food cost' : '');
+  var de = cur.daysElapsed || cur.daysInMonth || 30;
+  document.getElementById('beDailyNeed').textContent = inr(cur.totalCost / de) + '/day';
+  document.getElementById('beDailyActual').textContent =
+    'actual: ' + inr(cur.revenue / de) + '/day';
+  // occupancy needed for room revenue to cover (cost - food revenue) at current ADR
+  var needRoomRev = cur.totalCost - cur.food;
+  var avail = cur.rooms * de;
+  var occNeed = (cur.adr > 0 && avail > 0) ? needRoomRev / cur.adr / avail : 0;
+  var occNeedEl = document.getElementById('beOccNeed');
+  if (needRoomRev <= 0) {
+    occNeedEl.textContent = '0% (food covers costs)';
+  } else {
+    occNeedEl.textContent = pct(Math.max(occNeed, 0)) + (occNeed > 1 ? ' ⚠ impossible' : '');
+  }
+  document.getElementById('beOccActual').textContent = 'actual: ' + pct(cur.occupancy);
+  document.getElementById('beMargin').textContent =
+    cur.revenue > 0 ? pct(Math.max(cur.net, -cur.revenue) / cur.revenue) : '—';
+  var barMax = Math.max(cur.occupancy, occNeed, 1);
+  document.getElementById('beBarActual').style.width = (cur.occupancy / barMax * 100) + '%';
+  document.getElementById('beBarActual').style.background = cur.net >= 0 ? 'var(--green)' : 'var(--red)';
+  document.getElementById('beBarNeed').style.left = (Math.min(occNeed, barMax) / barMax * 100) + '%';
+}
+
+function statRows(el, rows) {
+  document.getElementById(el).innerHTML = rows.map(function (r) {
+    return '<div class="statrow"><span>' + r[0] + '</span><span class="sv">' + r[1] + '</span></div>';
+  }).join('');
+}
+
+function drawMoney(cur) {
+  document.getElementById('moneyTitle').textContent = 'Money control — ' + ymLabel(cur.ym);
+  mkChart('cCashBank', {
+    type: 'doughnut',
+    data: { labels: ['Cash', 'Bank / UPI'],
+      datasets: [{ data: [cur.cashIn, cur.bankIn], backgroundColor: ['#f59e0b', '#3b82f6'] }] },
+    options: { responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { position: 'right', labels: { boxWidth: 12, font: { size: 11 } } },
+        tooltip: { callbacks: { label: function (c) { return c.label + ': ' + inr(c.parsed); } } } } }
+  });
+  var gstPaid = cur.expByCat['GST Payable'] || 0;
+  statRows('moneyStats', [
+    ['GST collected on rooms', inr(cur.gst)],
+    ['GST paid out (books)', inr(gstPaid)],
+    ['GST gap', inr(cur.gst - gstPaid)],
+    ['Dues outstanding (recorded)', inr(cur.dueTotal)],
+    ['Discounts given', inr(cur.discountTotal)],
+    ['Owner savings set aside', inr(cur.expByCat['Owner Savings (7%)'] || 0)]
+  ]);
+}
+
+var FOOD_COST_CATS = ['Kitchen & Groceries', 'Outside Food', 'LPG / Gas', 'Water & Dairy'];
+function drawFood(cur) {
+  document.getElementById('foodTitle').textContent = 'Food business — ' + ymLabel(cur.ym);
+
+  var dream = (cur.hotels || []).find(function (m) { return m.hotel === 'Dream'; });
+  var paradise = (cur.hotels || []).find(function (m) { return m.hotel === 'Paradise'; });
+
+  var dreamCost = dream ? (dream.foodCost || 0) : 0; // assumed 40% of Dream food revenue
+  var paradiseCost = paradise // real booked food-related categories
+    ? FOOD_COST_CATS.reduce(function (s, c) { return s + (paradise.expByCat[c] || 0); }, 0)
+    : 0;
+
+  var cost = dreamCost + paradiseCost;
+  var net = cur.food - cost;
+  mkChart('cFood', {
+    type: 'bar',
+    data: { labels: ['Food revenue', 'Food costs'],
+      datasets: [{ data: [cur.food, cost], backgroundColor: ['#16a34a', '#dc2626'] }] },
+    options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false },
+        tooltip: { callbacks: { label: function (c) { return inr(c.parsed.x); } } } },
+      scales: { x: { ticks: { callback: function (v) { return inr(v); } } } } }
+  });
+  var rows = [
+    ['Food net', (net >= 0 ? '+' : '') + inr(net)],
+    ['Food margin', cur.food > 0 ? pct(net / cur.food) : '—']
+  ];
+  if (dream) rows.push(['Dream food cost (assumed 40%)', inr(dreamCost)]);
+  if (paradise) rows.push(['Paradise food cost (booked)', inr(paradiseCost)]);
+  statRows('foodStats', rows);
+
+  var noteParts = [];
+  if (dream) noteParts.push('Dream: assumed 40% of food revenue (owner estimate for unbooked in-house kitchen/ingredient cost; additive on top of any real "Outside Food" purchases already counted in Expenses by category).');
+  if (paradise) noteParts.push('Paradise: booked kitchen & groceries + outside food + LPG/gas + water & dairy from the expense book.');
+  document.getElementById('foodCostNote').textContent = noteParts.join(' ');
+}
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+
+function runAiAnalysisClick() {
+  var btn = document.getElementById('aiRunBtn');
+  var out = document.getElementById('aiResult');
+  btn.disabled = true;
+  btn.textContent = '⏳ Analyzing…';
+  out.innerHTML = '<div class="note">Calling OpenAI — this can take a few seconds…</div>';
+  google.script.run
+    .withSuccessHandler(function (result) {
+      btn.disabled = false;
+      btn.textContent = '✨ Run AI Analysis';
+      renderAiResult(result);
+    })
+    .withFailureHandler(function (e) {
+      btn.disabled = false;
+      btn.textContent = '✨ Run AI Analysis';
+      out.innerHTML = '<div class="err">AI analysis failed: ' + escapeHtml(e.message) + '</div>';
+    })
+    .runAiAnalysis(CURRENT_MONTH, PREV_MONTH);
+}
+
+function renderAiResult(result) {
+  var out = document.getElementById('aiResult');
+  var monAbbr = ymLabel(CURRENT_MONTH.ym).split(' ')[0];
+  var html = '<div class="aiSummaryBox">' + escapeHtml(result.summary) + '</div>';
+  if (result.anomalies && result.anomalies.length) {
+    html += result.anomalies.map(function (a) {
+      var dayLbl = a.day ? a.day + ' ' + monAbbr + ' — ' : '';
+      return '<div class="anomaly sev-' + a.severity + '">' +
+        '<span class="av">' + dayLbl + inr(a.amount) + '</span> · ' +
+        escapeHtml(a.category) + ' · ' + escapeHtml(a.particular) +
+        '<div class="note">' + escapeHtml(a.reason) + '</div></div>';
+    }).join('');
+  } else {
+    html += '<div class="note">No anomalies flagged for this month\'s expenses.</div>';
+  }
+  out.innerHTML = html;
+}
+
+function drawYoY(months) {
+  var byYear = {};
+  months.forEach(function (m) {
+    var y = m.ym.slice(0, 4), mo = Number(m.ym.slice(5)) - 1;
+    if (!byYear[y]) byYear[y] = new Array(12).fill(null);
+    byYear[y][mo] = m.revenue;
+  });
+  var palette = { 2024: '#94a3b8', 2025: '#f59e0b', 2026: '#2563eb', 2027: '#16a34a' };
+  var ds = Object.keys(byYear).sort().map(function (y) {
+    return { label: y, data: byYear[y], borderColor: palette[y] || '#8b5cf6',
+             backgroundColor: palette[y] || '#8b5cf6', tension: 0.25, pointRadius: 3, spanGaps: true };
+  });
+  mkChart('cYoY', {
+    type: 'line',
+    data: { labels: MON, datasets: ds },
+    options: { responsive: true, maintainAspectRatio: false,
+      scales: { y: { ticks: { callback: function (v) { return inr(v); } } } },
+      plugins: { tooltip: { callbacks: { label: function (c) { return c.dataset.label + ': ' + inr(c.parsed.y); } } } } }
+  });
+}
+
+function drawMonthly(months) {
+  var labels = months.map(function (m) { return ymLabel(m.ym); });
+  mkChart('cMonthly', {
+    type: 'bar',
+    data: { labels: labels, datasets: [
+      { label: 'Revenue', data: months.map(function (m) { return m.revenue; }), backgroundColor: '#86efac' },
+      { label: 'Expenses + Salary', data: months.map(function (m) { return m.totalCost; }), backgroundColor: '#fca5a5' },
+      { label: 'Net', type: 'line', data: months.map(function (m) { return m.net; }),
+        borderColor: '#2563eb', backgroundColor: '#2563eb', tension: 0.25, pointRadius: 2 }
+    ]},
+    options: { responsive: true, maintainAspectRatio: false,
+      scales: { y: { ticks: { callback: function (v) { return inr(v); } } } },
+      plugins: { tooltip: { callbacks: { label: function (c) { return c.dataset.label + ': ' + inr(c.parsed.y); } } } } }
+  });
+}
+
+function drawDaily(cur) {
+  document.getElementById('dailyTitle').textContent = 'Daily trend — ' + ymLabel(cur.ym);
+  var days = [], rev = [], exp = [];
+  for (var d = 1; d <= 31; d++) {
+    if (cur.days[d]) {
+      days.push(d);
+      rev.push(cur.days[d].rev);
+      exp.push(cur.days[d].exp);
+    }
+  }
+  mkChart('cDaily', {
+    type: 'line',
+    data: { labels: days, datasets: [
+      { label: 'Revenue', data: rev, borderColor: '#16a34a', backgroundColor: 'rgba(22,163,74,.12)', fill: true, tension: 0.25, pointRadius: 2 },
+      { label: 'Expenses', data: exp, borderColor: '#dc2626', backgroundColor: 'rgba(220,38,38,.10)', fill: true, tension: 0.25, pointRadius: 2 }
+    ]},
+    options: { responsive: true, maintainAspectRatio: false,
+      scales: { y: { ticks: { callback: function (v) { return inr(v); } } } },
+      plugins: { tooltip: { callbacks: { label: function (c) { return c.dataset.label + ': ' + inr(c.parsed.y); } } } } }
+  });
+}
+
+function drawCats(cur) {
+  document.getElementById('expTitle').textContent = 'Expenses by category — ' + ymLabel(cur.ym);
+  hideCatDrill();
+  var entries = Object.keys(cur.expByCat).map(function (k) { return [k, cur.expByCat[k]]; })
+    .sort(function (a, b) { return b[1] - a[1]; });
+  var top = entries.slice(0, 8);
+  var restEntries = entries.slice(8);
+  var rest = restEntries.reduce(function (s, e) { return s + e[1]; }, 0);
+  catClickMap = {};
+  top.forEach(function (e) { catClickMap[e[0]] = [e[0]]; });
+  if (rest > 0) {
+    top.push(['Other', rest]);
+    catClickMap['Other'] = restEntries.map(function (e) { return e[0]; });
+  }
+  mkChart('cCats', {
+    type: 'doughnut',
+    data: { labels: top.map(function (e) { return e[0]; }),
+      datasets: [{ data: top.map(function (e) { return e[1]; }),
+        backgroundColor: ['#6366f1','#0d9488','#f59e0b','#ef4444','#3b82f6','#8b5cf6','#10b981','#f97316','#94a3b8'] }] },
+    options: { responsive: true, maintainAspectRatio: false,
+      onClick: function (evt, elements) {
+        if (!elements.length) return;
+        var label = charts.cCats.data.labels[elements[0].index];
+        showCatDrill(label);
+      },
+      onHover: function (evt, elements) {
+        evt.native.target.style.cursor = elements.length ? 'pointer' : 'default';
+      },
+      plugins: { legend: { position: 'right', labels: { boxWidth: 12, font: { size: 11 } },
+        onClick: function (evt, item) { showCatDrill(item.text); } },
+        tooltip: { callbacks: { label: function (c) { return c.label + ': ' + inr(c.parsed); } } } } }
+  });
+}
+
+function showCatDrill(label) {
+  var cur = CURRENT_MONTH;
+  var cats = catClickMap[label] || [label];
+  var rows = [];
+  cats.forEach(function (c) {
+    rows = rows.concat((cur.expByCatRows || {})[c] || []);
+  });
+  rows.sort(function (a, b) { return (a.day - b.day) || (b.amount - a.amount); });
+  var total = rows.reduce(function (s, r) { return s + r.amount; }, 0);
+  var monAbbr = ymLabel(cur.ym).split(' ')[0];
+  var showHotel = scope === 'Both';
+  document.getElementById('catDrillTitle').textContent =
+    label + ' — ' + inr(total) + ' (' + rows.length + ' entr' + (rows.length === 1 ? 'y' : 'ies') + ')';
+  document.getElementById('catDrillList').innerHTML = rows.length
+    ? rows.map(function (r) {
+        var dateLbl = r.day + ' ' + monAbbr;
+        var hotelTag = showHotel && r.hotel ? '<span class="drilltag">' + r.hotel + '</span>' : '';
+        return '<div class="drillrow"><span><span class="drilldate">' + dateLbl + '</span>' + hotelTag +
+          ' ' + r.particular + '</span><span class="dv">' + inr(r.amount) + '</span></div>';
+      }).join('')
+    : '<div class="drillrow">No line-item detail recorded for this category.</div>';
+  document.getElementById('catDrill').style.display = 'block';
+  document.getElementById('catHint').style.display = 'none';
+}
+
+function hideCatDrill() {
+  document.getElementById('catDrill').style.display = 'none';
+  document.getElementById('catHint').style.display = 'block';
+}
+
+function drawMix(cur) {
+  var src = cur.rentBySource || {};
+  mkChart('cMix', {
+    type: 'bar',
+    data: { labels: ['Room', 'Food', 'OYO rooms', 'Walk-in rooms'],
+      datasets: [{ data: [cur.rent, cur.food, src.OYO || 0, src['Walk-in'] || 0],
+        backgroundColor: ['#6366f1', '#f59e0b', '#ef4444', '#10b981'] }] },
+    options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false },
+        tooltip: { callbacks: { label: function (c) { return inr(c.parsed.x); } } } },
+      scales: { x: { ticks: { callback: function (v) { return inr(v); } } } } }
+  });
+}
+
+function drawTable() {
+  var byYM = {};
+  DATA.months.forEach(function (m) {
+    if (!byYM[m.ym]) byYM[m.ym] = {};
+    byYM[m.ym][m.hotel] = m;
+  });
+  var yms = Object.keys(byYM).sort().reverse();
+  var html = '<tr><th>Month</th><th>Dream Rev</th><th>Dream Exp</th><th>Dream Salary</th><th>Dream Food Cost</th><th>Dream Net</th>' +
+    '<th>Paradise Rev</th><th>Paradise Exp</th><th>Paradise Salary</th><th>Paradise Food Cost</th><th>Paradise Net</th><th>Combined Net</th></tr>';
+  yms.forEach(function (ym) {
+    var d = byYM[ym].Dream, p = byYM[ym].Paradise;
+    var comb = (d ? d.net : 0) + (p ? p.net : 0);
+    function cells(m) {
+      if (!m) return '<td>—</td><td>—</td><td>—</td><td>—</td><td>—</td>';
+      return '<td>' + inr(m.revenue) + '</td><td>' + inr(m.expense) + '</td>' +
+        '<td>' + inr(m.salary) + '</td>' +
+        '<td>' + inr(m.foodCost || 0) + '</td>' +
+        '<td class="' + (m.net >= 0 ? 'netpos' : 'netneg') + '">' + inr(m.net) + '</td>';
+    }
+    html += '<tr><td>' + ymLabel(ym) + '</td>' + cells(d) + cells(p) +
+      '<td class="' + (comb >= 0 ? 'netpos' : 'netneg') + '">' + inr(comb) + '</td></tr>';
+  });
+  document.getElementById('plTable').innerHTML = html;
+}
+
+function drawFlags() {
+  var list = [];
+  DATA.months.forEach(function (m) {
+    if (scope !== 'Both' && m.hotel !== scope) return;
+    (m.flags || []).forEach(function (f) {
+      list.push(m.hotel + ' · ' + m.tab + ': ' + f);
+    });
+  });
+  document.getElementById('flagSummary').textContent =
+    'Data-quality flags (' + list.length + ')';
+  document.getElementById('flags').innerHTML = list.length
+    ? list.map(function (f) { return '<div class="flag">' + f + '</div>'; }).join('')
+    : '<div class="flag">No issues found — every row parsed cleanly.</div>';
+}
+
+load(false);
+</script>
+</body>
+</html>

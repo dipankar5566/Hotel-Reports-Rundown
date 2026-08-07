@@ -23,7 +23,7 @@
     .filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; align-items: center; }
     .chip { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 6px 14px; font-size: 13px; cursor: pointer; user-select: none; }
     .chip.on { background: var(--ink); color: #fff; border-color: var(--ink); }
-    select { border: 1px solid var(--line); background: var(--card); border-radius: 8px; padding: 6px 10px; font-size: 13px; }
+    select, input[type=number] { border: 1px solid var(--line); background: var(--card); border-radius: 8px; padding: 6px 10px; font-size: 13px; }
     .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
     .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
     .card .lbl { font-size: 12px; color: var(--muted); }
@@ -133,6 +133,22 @@
     <div class="panel">
       <h2 id="dailyTitle">Daily trend</h2>
       <div class="chartbox" style="height:240px"><canvas id="cDaily"></canvas></div>
+      <div class="begrid" style="margin-top:12px">
+        <div>
+          <div class="lbl2">From day</div>
+          <input type="number" id="dailyFrom" min="1" max="31" style="width:100%">
+        </div>
+        <div>
+          <div class="lbl2">To day</div>
+          <input type="number" id="dailyTo" min="1" max="31" style="width:100%">
+        </div>
+        <div>
+          <div class="lbl2">Net to collect for that range</div>
+          <div class="v2" id="dailyRangeNet"></div>
+        </div>
+      </div>
+      <div class="tablewrap"><table id="dailyTable"></table></div>
+      <div class="note">Daily Net = that day's booked revenue − that day's booked expenses. It excludes the ₹50,000/month staff salary and Dream's assumed 40% food cost (neither is a real daily cash event), so it won't match the monthly Net P&amp;L KPI above — use it to see cash build up day by day between collection trips.</div>
     </div>
 
     <div class="grid2">
@@ -273,6 +289,9 @@ function monthsInScope() {
     t.occupancy = avail > 0 ? t.roomNights / avail : 0;
     t.adr = t.roomNights > 0 ? t.rent / t.roomNights : 0;
     t.revpar = avail > 0 ? t.rent / avail : 0;
+    Object.keys(t.days).forEach(function (k) {
+      t.days[k].net = t.days[k].rev - t.days[k].exp;
+    });
     return t;
   });
 }
@@ -364,6 +383,7 @@ function render() {
   drawBreakeven(cur);
   drawMonthly(months);
   drawDaily(cur);
+  drawDailyTable(cur);
   drawCats(cur);
   drawMix(cur);
   drawMoney(cur);
@@ -562,24 +582,61 @@ function drawMonthly(months) {
 
 function drawDaily(cur) {
   document.getElementById('dailyTitle').textContent = 'Daily trend — ' + ymLabel(cur.ym);
-  var days = [], rev = [], exp = [];
+  var days = [], rev = [], exp = [], net = [];
   for (var d = 1; d <= 31; d++) {
     if (cur.days[d]) {
       days.push(d);
       rev.push(cur.days[d].rev);
       exp.push(cur.days[d].exp);
+      net.push(cur.days[d].net);
     }
   }
   mkChart('cDaily', {
     type: 'line',
     data: { labels: days, datasets: [
       { label: 'Revenue', data: rev, borderColor: '#16a34a', backgroundColor: 'rgba(22,163,74,.12)', fill: true, tension: 0.25, pointRadius: 2 },
-      { label: 'Expenses', data: exp, borderColor: '#dc2626', backgroundColor: 'rgba(220,38,38,.10)', fill: true, tension: 0.25, pointRadius: 2 }
+      { label: 'Expenses', data: exp, borderColor: '#dc2626', backgroundColor: 'rgba(220,38,38,.10)', fill: true, tension: 0.25, pointRadius: 2 },
+      { label: 'Net', data: net, borderColor: '#2563eb', backgroundColor: '#2563eb', fill: false, borderWidth: 2.5, tension: 0.25, pointRadius: 2 }
     ]},
     options: { responsive: true, maintainAspectRatio: false,
       scales: { y: { ticks: { callback: function (v) { return inr(v); } } } },
       plugins: { tooltip: { callbacks: { label: function (c) { return c.dataset.label + ': ' + inr(c.parsed.y); } } } } }
   });
+}
+
+function drawDailyTable(cur) {
+  var fromEl = document.getElementById('dailyFrom');
+  var toEl = document.getElementById('dailyTo');
+  var lastDay = cur.daysElapsed || cur.daysInMonth || 31;
+  fromEl.min = 1; fromEl.max = lastDay; fromEl.value = 1;
+  toEl.min = 1; toEl.max = lastDay; toEl.value = lastDay;
+
+  var running = 0;
+  var html = '<tr><th>Day</th><th>Revenue</th><th>Expense</th><th>Net</th><th>Running total</th></tr>';
+  for (var d = 1; d <= 31; d++) {
+    if (!cur.days[d]) continue;
+    var dd = cur.days[d];
+    running += dd.net;
+    html += '<tr><td>' + d + '</td><td>' + inr(dd.rev) + '</td><td>' + inr(dd.exp) + '</td>' +
+      '<td class="' + (dd.net >= 0 ? 'netpos' : 'netneg') + '">' + inr(dd.net) + '</td>' +
+      '<td class="' + (running >= 0 ? 'netpos' : 'netneg') + '">' + inr(running) + '</td></tr>';
+  }
+  document.getElementById('dailyTable').innerHTML = html;
+
+  function updateRangeNet() {
+    var from = Math.max(1, Number(fromEl.value) || 1);
+    var to = Math.max(from, Number(toEl.value) || from);
+    var total = 0;
+    for (var dd2 = from; dd2 <= to; dd2++) {
+      if (cur.days[dd2]) total += cur.days[dd2].net;
+    }
+    var el = document.getElementById('dailyRangeNet');
+    el.textContent = inr(total);
+    el.className = 'v2 ' + (total >= 0 ? 'pos' : 'neg');
+  }
+  fromEl.onchange = updateRangeNet;
+  toEl.onchange = updateRangeNet;
+  updateRangeNet();
 }
 
 function drawCats(cur) {

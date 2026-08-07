@@ -3,7 +3,7 @@
  * with gzip'd CacheService caching (payload exceeds the 100KB plain limit).
  */
 
-var CACHE_KEY = 'dash_v6';
+var CACHE_KEY = 'dash_v7';
 var CACHE_SECS = 600; // 10 min
 
 function getDashboardData(forceRefresh) {
@@ -129,6 +129,9 @@ function buildPayloadFromBooks_(books, errors) {
           }
         }
       });
+      for (var dnum in entry.days) {
+        entry.days[dnum].net = entry.days[dnum].rev - entry.days[dnum].exp;
+      }
       entry.revenue = entry.rent + entry.food;
       // Dream only (Paradise's foodCostPct is 0): owner-assumed cost of
       // unbooked in-house kitchen ingredients, additive on top of

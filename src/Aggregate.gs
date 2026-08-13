@@ -3,7 +3,7 @@
  * with gzip'd CacheService caching (payload exceeds the 100KB plain limit).
  */
 
-var CACHE_KEY = 'dash_v7';
+var CACHE_KEY = 'dash_v8';
 var CACHE_SECS = 600; // 10 min
 
 function getDashboardData(forceRefresh) {
@@ -100,15 +100,20 @@ function buildPayloadFromBooks_(books, errors) {
             entry.rentBySource[d] = (entry.rentBySource[d] || 0) + s.sources[d];
           }
           for (d in s.days) {
-            entry.days[d] = entry.days[d] || { rev: 0, exp: 0 };
+            entry.days[d] = entry.days[d] || { rev: 0, exp: 0, rent: 0, nights: 0 };
             entry.days[d].rev += s.days[d];
+            entry.days[d].rent += s.days[d]; // room revenue only (for same-date ADR/RevPAR)
+          }
+          for (d in s.nightsByDay) {
+            entry.days[d] = entry.days[d] || { rev: 0, exp: 0, rent: 0, nights: 0 };
+            entry.days[d].nights += s.nightsByDay[d]; // room-nights per day (for same-date occupancy)
           }
         } else if (s.type === 'food') {
           entry.food += s.total;
           entry.cashIn += s.cash;
           entry.bankIn += s.bank;
           for (d in s.days) {
-            entry.days[d] = entry.days[d] || { rev: 0, exp: 0 };
+            entry.days[d] = entry.days[d] || { rev: 0, exp: 0, rent: 0, nights: 0 };
             entry.days[d].rev += s.days[d];
           }
         } else if (s.type === 'expense') {
@@ -124,7 +129,7 @@ function buildPayloadFromBooks_(books, errors) {
             entry.expByCatRows[d] = entry.expByCatRows[d].concat(tagged);
           }
           for (d in s.days) {
-            entry.days[d] = entry.days[d] || { rev: 0, exp: 0 };
+            entry.days[d] = entry.days[d] || { rev: 0, exp: 0, rent: 0, nights: 0 };
             entry.days[d].exp += s.days[d];
           }
         }

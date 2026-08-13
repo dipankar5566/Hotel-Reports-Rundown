@@ -75,17 +75,24 @@ function categorize(particular) {
   return 'General & Misc';
 }
 
-// Model for the on-demand "Run AI Analysis" button (AI.gs). gpt-4o-mini is a
-// stable, well-documented model with standard Chat Completions params and no
-// reasoning-model quirks. If you swap to a newer/reasoning model later, test
-// one call first — reasoning models need a "reasoning_effort" param this
-// code doesn't send, and may reject "temperature".
+// Model for the on-demand "Run AI Analysis" button (AI.gs). gpt-4.1 is a
+// strong non-reasoning model that keeps the exact same Chat Completions
+// request path as before — standard "temperature", "max_completion_tokens",
+// and strict json_schema Structured Outputs, with no reasoning-model quirks.
+// If you swap to a reasoning model later (e.g. gpt-5-mini) test one call
+// first — reasoning models need a "reasoning_effort" param this code doesn't
+// send, and may reject "temperature".
 // NOTE: the OpenAI API key is NOT here. It lives only in Script Properties
 // (Apps Script editor > Project Settings > Script Properties), set once by
 // the owner directly in the editor UI, and is never committed to source.
-var AI_MODEL = 'gpt-4o-mini';
+var AI_MODEL = 'gpt-4.1';
 
 // Safety cap on expense line items sent to OpenAI in one AI Analysis call.
 // Typical month has 50-150 rows (well under this); this just bounds
 // cost/latency in the unusual case of an outsized month.
 var AI_MAX_EXPENSE_ROWS = 400;
+
+// How many trailing months (including the current one) of compact KPI
+// snapshots to feed the AI so it can read trends and give an early-warning
+// forecast. Mirrored client-side as AI_TREND_MONTHS in Index.html.
+var AI_TREND_MONTHS = 6;

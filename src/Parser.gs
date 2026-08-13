@@ -157,7 +157,7 @@ function parseTab_(values, year, month) {
     }
     var s = { type: t, rows: 0, total: 0, cash: 0, bank: 0, gst: 0,
               nights: 0, due: 0, discount: 0,
-              days: {}, cats: {}, catRows: {}, sources: {} };
+              days: {}, cats: {}, catRows: {}, sources: {}, nightsByDay: {} };
     var lastDay = null;
     for (var r = det.headerRow + 1; r < values.length; r++) {
       var row = values[r];
@@ -183,7 +183,9 @@ function parseTab_(values, year, month) {
       if (gstCol !== null) { var gv = num_(row[gstCol]); if (gv) s.gst += gv; }
       if (nightsCol !== null) {
         var nv = num_(row[nightsCol]);
-        s.nights += (nv && nv > 0 && nv < 100) ? nv : 1; // text/blank/garbage -> 1 night
+        var nnight = (nv && nv > 0 && nv < 100) ? nv : 1; // text/blank/garbage -> 1 night
+        s.nights += nnight;
+        s.nightsByDay[d] = (s.nightsByDay[d] || 0) + nnight;
       }
       // Due/Discount columns hold numbers or free text ("DUE PAID"); only sum numbers
       if (dueCol !== null) { var dv = num_(row[dueCol]); if (dv) s.due += dv; }

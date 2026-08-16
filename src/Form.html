@@ -1,0 +1,331 @@
+<!-- Daily-entry PWA client for the Hotel P&L sheets. Served by Main.gs's
+     doGet when ?view=entry. Talks to Entry.gs via google.script.run. ES5 to
+     match the rest of the project. Online-only v1 (offline queue deferred). -->
+<base target="_top">
+<meta name="theme-color" content="#0f766e">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Daily Entry">
+<link rel="apple-touch-icon" href='data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="192" height="192"><rect width="192" height="192" rx="36" fill="%230f766e"/><text x="96" y="134" font-size="120" text-anchor="middle" fill="%23ffffff" font-family="sans-serif">H</text></svg>'>
+
+<style>
+  :root { --teal:#0f766e; --teal2:#115e59; --bg:#f5f5f4; --card:#fff; --line:#e7e5e4; --muted:#78716c; --danger:#b91c1c; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:#1c1917; }
+  .wrap { max-width:640px; margin:0 auto; padding:16px; }
+  h1 { font-size:20px; margin:8px 0 16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:16px; }
+  label { display:block; font-size:13px; color:var(--muted); margin:12px 0 4px; }
+  input, select { width:100%; padding:11px 12px; font-size:16px; border:1px solid var(--line); border-radius:8px; background:#fff; }
+  input:focus, select:focus { outline:2px solid var(--teal); border-color:var(--teal); }
+  button { font-size:16px; font-weight:600; border:none; border-radius:8px; padding:12px 16px; cursor:pointer; }
+  .primary { background:var(--teal); color:#fff; width:100%; }
+  .primary:active { background:var(--teal2); }
+  .primary:disabled { opacity:.6; }
+  .chips { display:flex; gap:8px; margin-bottom:8px; }
+  .chip { flex:1; text-align:center; padding:10px; border:1px solid var(--line); border-radius:8px; background:#fff; font-weight:600; color:var(--muted); }
+  .chip.on { background:var(--teal); color:#fff; border-color:var(--teal); }
+  .hidden { display:none; }
+  .toast { position:fixed; left:50%; bottom:20px; transform:translateX(-50%); background:#1c1917; color:#fff; padding:12px 18px; border-radius:10px; font-size:14px; max-width:90%; box-shadow:0 6px 20px rgba(0,0,0,.25); }
+  .toast.err { background:var(--danger); }
+  .entry { display:flex; align-items:center; gap:8px; padding:10px 0; border-top:1px solid var(--line); font-size:14px; }
+  .entry .grow { flex:1; }
+  .entry .day { font-weight:700; min-width:34px; }
+  .entry .sec { font-size:11px; text-transform:uppercase; color:var(--muted); }
+  .entry .amt { font-variant-numeric:tabular-nums; font-weight:600; }
+  .mini { padding:6px 10px; font-size:13px; }
+  .mini.del { background:#fee2e2; color:var(--danger); }
+  .mini.ed { background:#e7e5e4; color:#1c1917; }
+  .muted { color:var(--muted); font-size:13px; }
+</style>
+
+<div class="wrap">
+  <h1>🏨 Daily Entry</h1>
+
+  <!-- ---- PIN / unlock screen ---- -->
+  <div id="pinScreen" class="card">
+    <label>Hotel</label>
+    <select id="hotel">
+      <option value="Dream">Dream</option>
+      <option value="Paradise">Paradise</option>
+    </select>
+    <label>PIN</label>
+    <input id="pin" type="password" inputmode="numeric" autocomplete="off" placeholder="Enter hotel PIN">
+    <div style="height:14px"></div>
+    <button class="primary" id="unlockBtn">Unlock</button>
+    <p class="muted" id="pinMsg" style="margin-top:12px"></p>
+  </div>
+
+  <!-- ---- entry app ---- -->
+  <div id="app" class="hidden">
+    <div class="card">
+      <div class="chips" id="sectionChips"></div>
+
+      <label>Date</label>
+      <input id="entryDate" type="date">
+
+      <div id="fields"></div>
+
+      <div style="height:16px"></div>
+      <button class="primary" id="saveBtn">Save entry</button>
+      <p class="muted hidden" id="editHint" style="margin-top:10px"></p>
+    </div>
+
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <strong>This month's app entries</strong>
+        <button class="mini ed" id="refreshBtn">Refresh</button>
+      </div>
+      <div id="entries"><p class="muted">—</p></div>
+    </div>
+
+    <button class="mini ed" id="lockBtn" style="width:100%">Lock</button>
+  </div>
+</div>
+
+<script>
+// ---- inline web-app manifest (installable icon; online-only v1) ----
+(function () {
+  var icon = document.querySelector('link[rel="apple-touch-icon"]').getAttribute('href');
+  var manifest = {
+    name: 'Hotel Daily Entry', short_name: 'Daily Entry',
+    display: 'standalone', background_color: '#f5f5f4', theme_color: '#0f766e',
+    start_url: location.href,
+    icons: [{ src: icon, sizes: '192x192', type: 'image/svg+xml', purpose: 'any' }]
+  };
+  var url = 'data:application/manifest+json;base64,' + btoa(unescape(encodeURIComponent(JSON.stringify(manifest))));
+  var link = document.createElement('link');
+  link.rel = 'manifest'; link.href = url;
+  document.head.appendChild(link);
+})();
+
+var STATE = { hotel: null, pin: null, config: null, section: 'rent', editingId: null };
+
+// Field definitions per section. type: text|number|select. req = required.
+var FIELD_DEFS = {
+  rent: [
+    { key: 'room', label: 'Room', type: 'select', src: 'rooms', req: true },
+    { key: 'source', label: 'Source', type: 'select', src: 'sources' },
+    { key: 'nights', label: 'Nights', type: 'number' },
+    { key: 'amount', label: 'Room revenue (Rs)', type: 'number', req: true },
+    { key: 'cash', label: 'Cash (Rs)', type: 'number' },
+    { key: 'bank', label: 'Banking & UPI (Rs)', type: 'number' },
+    { key: 'gst', label: 'GST (Rs)', type: 'number' },
+    { key: 'due', label: 'Due (Rs)', type: 'number' },
+    { key: 'discount', label: 'Discount (Rs)', type: 'number' }
+  ],
+  food: [
+    { key: 'room', label: 'Room / table', type: 'select', src: 'rooms', req: true },
+    { key: 'amount', label: 'Amount (Rs)', type: 'number', req: true },
+    { key: 'cash', label: 'Cash (Rs)', type: 'number' },
+    { key: 'bank', label: 'Banking & UPI (Rs)', type: 'number' }
+  ],
+  expense: [
+    { key: 'category', label: 'Category', type: 'select', src: 'categories', req: true },
+    { key: 'particular', label: 'Particular (description)', type: 'text', req: true },
+    { key: 'amount', label: 'Amount (Rs)', type: 'number', req: true }
+  ]
+};
+
+function $(id) { return document.getElementById(id); }
+
+function toast(msg, isErr) {
+  var t = document.createElement('div');
+  t.className = 'toast' + (isErr ? ' err' : '');
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(function () { t.parentNode && t.parentNode.removeChild(t); }, isErr ? 5000 : 2500);
+}
+
+function todayIso() {
+  var d = new Date();
+  function p(n) { return (n < 10 ? '0' : '') + n; }
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+}
+
+// ---- unlock ----
+$('unlockBtn').onclick = function () {
+  var hotel = $('hotel').value, pin = $('pin').value;
+  $('pinMsg').textContent = 'Checking...';
+  $('unlockBtn').disabled = true;
+  google.script.run
+    .withSuccessHandler(function (cfg) {
+      STATE.hotel = hotel; STATE.pin = pin; STATE.config = cfg;
+      $('pinMsg').textContent = '';
+      $('unlockBtn').disabled = false;
+      $('pinScreen').classList.add('hidden');
+      $('app').classList.remove('hidden');
+      $('entryDate').value = todayIso();
+      selectSection('rent');
+      loadEntries();
+    })
+    .withFailureHandler(function (err) {
+      $('unlockBtn').disabled = false;
+      $('pinMsg').textContent = err && err.message ? err.message : String(err);
+    })
+    .getEntryConfig(hotel, pin);
+};
+
+function buildSectionChips() {
+  var box = $('sectionChips'); box.innerHTML = '';
+  ['rent', 'food', 'expense'].forEach(function (sec) {
+    var b = document.createElement('div');
+    b.className = 'chip' + (sec === STATE.section ? ' on' : '');
+    b.textContent = sec.charAt(0).toUpperCase() + sec.slice(1);
+    b.onclick = function () { selectSection(sec); };
+    box.appendChild(b);
+  });
+}
+
+function selectSection(sec) {
+  STATE.section = sec;
+  STATE.editingId = null;
+  buildSectionChips();
+  buildFields();
+  updateSaveLabel();
+}
+
+function buildFields(prefill) {
+  var box = $('fields'); box.innerHTML = '';
+  FIELD_DEFS[STATE.section].forEach(function (def) {
+    var lab = document.createElement('label');
+    lab.textContent = def.label + (def.req ? ' *' : '');
+    box.appendChild(lab);
+    var el;
+    if (def.type === 'select') {
+      el = document.createElement('select');
+      var opts = STATE.config[def.src] || [];
+      if (!def.req) { var blank = document.createElement('option'); blank.value = ''; blank.textContent = '-'; el.appendChild(blank); }
+      opts.forEach(function (o) {
+        var op = document.createElement('option'); op.value = o; op.textContent = o; el.appendChild(op);
+      });
+    } else {
+      el = document.createElement('input');
+      el.type = def.type === 'number' ? 'number' : 'text';
+      if (def.type === 'number') { el.inputMode = 'decimal'; el.min = '0'; }
+    }
+    el.id = 'f_' + def.key;
+    if (prefill && prefill[def.key] !== undefined && prefill[def.key] !== null) el.value = prefill[def.key];
+    box.appendChild(el);
+  });
+}
+
+function updateSaveLabel() {
+  $('saveBtn').textContent = STATE.editingId ? 'Update entry' : 'Save entry';
+  var hint = $('editHint');
+  if (STATE.editingId) { hint.textContent = 'Editing an existing entry. Change fields and Update, or tap a section to cancel.'; hint.classList.remove('hidden'); }
+  else hint.classList.add('hidden');
+}
+
+function collectPayload() {
+  var dateStr = $('entryDate').value;
+  if (!dateStr) { toast('Pick a date.', true); return null; }
+  var parts = dateStr.split('-');
+  var fields = {};
+  var defs = FIELD_DEFS[STATE.section];
+  for (var i = 0; i < defs.length; i++) {
+    var d = defs[i];
+    var v = $('f_' + d.key).value;
+    if (d.req && (v === '' || v === null)) { toast(d.label + ' is required.', true); return null; }
+    fields[d.key] = v;
+  }
+  if (!(Number(fields.amount) > 0)) { toast('Amount must be greater than 0.', true); return null; }
+  return {
+    hotel: STATE.hotel, pin: STATE.pin, section: STATE.section,
+    date: { year: Number(parts[0]), month: Number(parts[1]), day: Number(parts[2]) },
+    fields: fields
+  };
+}
+
+$('saveBtn').onclick = function () {
+  var payload = collectPayload();
+  if (!payload) return;
+  $('saveBtn').disabled = true;
+  var editing = STATE.editingId;
+  if (editing) payload.entryId = editing;
+  var runner = google.script.run
+    .withSuccessHandler(function () {
+      $('saveBtn').disabled = false;
+      toast(editing ? 'Updated.' : 'Saved.');
+      STATE.editingId = null;
+      buildFields();       // clear entered values for the next row
+      updateSaveLabel();
+      loadEntries();
+    })
+    .withFailureHandler(function (err) {
+      $('saveBtn').disabled = false;
+      toast(err && err.message ? err.message : String(err), true);
+    });
+  if (editing) runner.updateEntry(payload); else runner.submitEntry(payload);
+};
+
+function currentYm() {
+  var v = $('entryDate').value; if (!v) return null;
+  var p = v.split('-'); return p[0] + '-' + p[1];
+}
+
+$('refreshBtn').onclick = loadEntries;
+$('entryDate').onchange = loadEntries;
+
+function loadEntries() {
+  var ym = currentYm(); if (!ym) return;
+  $('entries').innerHTML = '<p class="muted">Loading...</p>';
+  google.script.run
+    .withSuccessHandler(renderEntries)
+    .withFailureHandler(function (err) {
+      $('entries').innerHTML = '<p class="muted">' + (err && err.message ? err.message : 'Could not load') + '</p>';
+    })
+    .listEntries(STATE.hotel, STATE.pin, ym);
+}
+
+function renderEntries(list) {
+  var box = $('entries');
+  if (!list || !list.length) { box.innerHTML = '<p class="muted">No app entries for this month yet.</p>'; return; }
+  box.innerHTML = '';
+  list.forEach(function (e) {
+    var row = document.createElement('div'); row.className = 'entry';
+    var day = document.createElement('span'); day.className = 'day'; day.textContent = e.day ? (e.day + '') : '?';
+    var grow = document.createElement('div'); grow.className = 'grow';
+    grow.innerHTML = '<span class="sec">' + e.section + '</span><br>' + escapeHtml(e.label || '');
+    var amt = document.createElement('span'); amt.className = 'amt'; amt.textContent = 'Rs ' + fmt(e.amount);
+    var ed = document.createElement('button'); ed.className = 'mini ed'; ed.textContent = 'Edit';
+    ed.onclick = function () { startEdit(e); };
+    var del = document.createElement('button'); del.className = 'mini del'; del.textContent = 'Delete';
+    del.onclick = function () { doDelete(e); };
+    row.appendChild(day); row.appendChild(grow); row.appendChild(amt); row.appendChild(ed); row.appendChild(del);
+    box.appendChild(row);
+  });
+}
+
+function startEdit(e) {
+  STATE.section = e.section;
+  STATE.editingId = e.entryId;
+  buildSectionChips();
+  buildFields(e.fields || {});
+  updateSaveLabel();
+  if (e.day) {
+    var ym = currentYm().split('-');
+    var p = function (n) { return (n < 10 ? '0' : '') + n; };
+    $('entryDate').value = ym[0] + '-' + ym[1] + '-' + p(e.day);
+  }
+  window.scrollTo(0, 0);
+}
+
+function doDelete(e) {
+  if (!window.confirm('Delete this ' + e.section + ' entry (day ' + (e.day || '?') + ', Rs ' + fmt(e.amount) + ')?')) return;
+  google.script.run
+    .withSuccessHandler(function () { toast('Deleted.'); loadEntries(); })
+    .withFailureHandler(function (err) { toast(err && err.message ? err.message : String(err), true); })
+    .deleteEntry(STATE.hotel, STATE.pin, currentYm(), e.entryId);
+}
+
+$('lockBtn').onclick = function () {
+  STATE = { hotel: null, pin: null, config: null, section: 'rent', editingId: null };
+  $('app').classList.add('hidden');
+  $('pinScreen').classList.remove('hidden');
+  $('pin').value = '';
+};
+
+function fmt(n) { n = Number(n) || 0; return n.toLocaleString('en-IN'); }
+function escapeHtml(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+</script>

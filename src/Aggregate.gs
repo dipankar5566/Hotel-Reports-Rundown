@@ -3,7 +3,7 @@
  * with gzip'd CacheService caching (payload exceeds the 100KB plain limit).
  */
 
-var CACHE_KEY = 'dash_v8';
+var CACHE_KEY = 'dash_v10'; // v10: entry app + additive expense Category parse
 var CACHE_SECS = 600; // 10 min
 
 function getDashboardData(forceRefresh) {

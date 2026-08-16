@@ -74,6 +74,7 @@ function detectSections_(values) {
     }
     if (!anchors.length) continue;
     var sections = [];
+    var flags = [];
     for (var i = 0; i < anchors.length; i++) {
       var ac = anchors[i].col;
       var start = Math.max(0, ac - 2);
@@ -98,12 +99,31 @@ function detectSections_(values) {
         }
       }
       var dc = 'date' in heads ? heads['date'] : null;
-      if (dc === null && ac > 0 && norm_(values[hr][ac - 1]) === '') dc = ac - 1;
       if (dc === null) dc = colFor_(heads, ['date of arrival']);
-      if (dc === null) continue;
+      // No explicit date header found. By layout the date column always sits
+      // immediately left of the Room/Particulers anchor, so fall back to that
+      // cell. Previously this fallback only fired when the header cell there
+      // was blank; a stray value typed over the "Date" header (e.g. a "`" in
+      // Paradise AUG26 A1) defeated it and the WHOLE section was dropped —
+      // silently zeroing its total (room sales = 0) with no data-quality flag.
+      if (dc === null && ac > 0) {
+        dc = ac - 1;
+        if (norm_(values[hr][ac - 1]) !== '') {
+          flags.push(anchors[i].type + ': no "Date" header at col ' +
+            (ac) + ' (found "' + norm_(values[hr][ac - 1]) +
+            '"); used it as the date column anyway');
+        }
+      }
+      if (dc === null) {
+        // Anchor sits in column A with no usable date column anywhere — the
+        // section can't be dated, so it's dropped. Flag it so it never zeroes
+        // a total silently again.
+        flags.push(anchors[i].type + ': section dropped (no date column found)');
+        continue;
+      }
       sections.push({ type: anchors[i].type, dateCol: dc, heads: heads });
     }
-    if (sections.length) return { headerRow: hr, sections: sections };
+    if (sections.length) return { headerRow: hr, sections: sections, flags: flags };
   }
   return null;
 }
@@ -134,6 +154,7 @@ function parseTab_(values, year, month) {
     out.flags.push('no sections detected');
     return out;
   }
+  if (det.flags && det.flags.length) out.flags = out.flags.concat(det.flags);
   det.sections.forEach(function (sec) {
     var heads = sec.heads;
     var t = sec.type;
@@ -144,6 +165,11 @@ function parseTab_(values, year, month) {
     var bankCol = colFor_(heads, ['banking', 'banking & upi']);
     var gstCol = colFor_(heads, ['gst']);
     var partCol = colFor_(heads, ['particulers', 'particulars']);
+    // Explicit expense category, written by the entry app. When present it is
+    // authoritative; otherwise we fall back to categorize(particular). Legacy
+    // staff tabs have no "Category" header, so catCol is null and their output
+    // is byte-identical (the parser-vs-pivot invariant is preserved).
+    var catCol = t === 'expense' ? colFor_(heads, ['category']) : null;
     var srcCol = colFor_(heads, ['source']);
     var roomCol = colFor_(heads, ['room with source', 'room no.', 'room (food & others)']);
     var nightsCol = t === 'rent'
@@ -191,7 +217,10 @@ function parseTab_(values, year, month) {
       if (dueCol !== null) { var dv = num_(row[dueCol]); if (dv) s.due += dv; }
       if (discCol !== null) { var xv = num_(row[discCol]); if (xv) s.discount += xv; }
       if (t === 'expense' && partCol !== null) {
-        var cat = categorize(row[partCol]);
+        var explicitCat = catCol !== null
+          ? String(row[catCol] == null ? '' : row[catCol]).replace(/\s+/g, ' ').trim()
+          : '';
+        var cat = explicitCat || categorize(row[partCol]);
         s.cats[cat] = (s.cats[cat] || 0) + amt;
         var particular = String(row[partCol] || '').replace(/\s+/g, ' ').trim();
         if (particular) {

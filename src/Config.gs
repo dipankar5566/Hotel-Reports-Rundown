@@ -18,6 +18,17 @@ var HOTELS = [
 // (owner-confirmed July 2026). Prorated for the in-progress month.
 var SALARY_PER_HOTEL_MONTH = 50000;
 
+// Canonical room list per hotel for the entry app's Room dropdown. Fixed
+// lists make a mistyped room impossible and let the app write a clean
+// Room/Source instead of relying on the parser's OYO/Walk-in guessing.
+// TODO(owner): replace these placeholders with the REAL room labels used in
+// the books — include any non-numeric ones like 'BAR AREA' or 'T-20' if they
+// occur. Counts should match HOTELS[].rooms (Dream 9, Paradise 5).
+var ROOMS_BY_HOTEL = {
+  Dream: ['401', '402', '403', '404', '405', '406', '301', '302', '303'],
+  Paradise: ['108', '109', '110', '111', '112']
+};
+
 var MONTH_INDEX = {
   JAN: 1, FEB: 2, MAR: 3, APR: 4, MAY: 5, JUN: 6,
   JUL: 7, AUG: 8, SEP: 9, OCT: 10, NOV: 11, DEC: 12

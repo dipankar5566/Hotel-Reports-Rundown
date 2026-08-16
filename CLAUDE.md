@@ -1,6 +1,6 @@
 # Hotel P&L Dashboard — Dream & Paradise
 
-A Google Apps Script (GAS) web app that reads two staff-maintained Google Sheets (one per hotel) and renders a monthly/daily P&L dashboard: KPIs, break-even, money control, food business, YoY, and an on-demand OpenAI analysis.
+A Google Apps Script (GAS) web app that reads two staff-maintained Google Sheets (one per hotel) and renders a monthly/daily P&L dashboard: KPIs, break-even, money control, food business, YoY, and an on-demand OpenAI analysis. A separate **daily-entry PWA** (same GAS project, its own web-app deployment) lets hotel staff add clean rent/food/expense rows from a phone — killing the free-text date typos that used to silently zero a section. Coexists with manual sheet edits today; designed to become the sole input source.
 
 ## Repo map
 
@@ -10,18 +10,25 @@ A Google Apps Script (GAS) web app that reads two staff-maintained Google Sheets
 ├── .clasp.json          clasp config: script id + rootDir (src).
 ├── appsscript.json      (in src/) GAS manifest — scopes, web-app access.
 └── src/
-    ├── Config.gs        Hotels + spreadsheet IDs, room counts, salary/food-cost
-    │                    assumptions, expense category rules, AI model + tunables.
+    ├── Config.gs        Hotels + spreadsheet IDs, room counts, per-hotel room
+    │                    lists, salary/food-cost assumptions, expense category
+    │                    rules, AI model + tunables.
     ├── Parser.gs        One month tab (2D values) -> normalized sections
     │                    (rent/food/expense). Anchor-based; skips pivot blocks.
     ├── Aggregate.gs     Both books -> full dashboard payload; gzip'd cache.
     ├── AI.gs            On-demand OpenAI analysis (summary, trend, recs, anomalies).
-    ├── Main.gs          doGet() -> serves Index.html.
+    ├── Entry.gs         Daily-entry app server: pure column-resolution + row-build
+    │                    (reuses Parser's detectSections_/colFor_) + thin sheet
+    │                    writers (submit/update/delete/list), PIN-gated.
+    ├── Main.gs          doGet() -> Index.html (dashboard, DASHBOARD_TOKEN-gated)
+    │                    or Form.html (entry app, ?view=entry).
     ├── Validate.gs      validateAll() — parser-vs-pivot totals check inside GAS.
-    └── Index.html       Entire client: rendering, filters, charts, AI panel.
+    ├── Index.html       Entire dashboard client: rendering, filters, charts, AI.
+    └── Form.html        Daily-entry PWA client: PIN, dropdowns, date-picker,
+                         this-month list with edit/delete.
 ```
 
-External dependencies: Chart.js (CDN, client only) and the OpenAI REST API (server, on-demand). No build step, no npm, no bundler.
+External dependencies: Chart.js (CDN, dashboard client only) and the OpenAI REST API (server, on-demand). No build step, no npm, no bundler.
 
 ## Architecture rules
 
@@ -58,11 +65,26 @@ clasp push -f
 clasp redeploy <DEPLOYMENT_ID>
 ```
 
-The deployment id is the long `AKfycb…` string for the web-app deployment (execute-as-owner, access = owner only). `clasp push` alone updates the editor project but not the live URL — you must `redeploy` the existing deployment id to publish.
+`clasp push` alone updates the editor project but not the live URL — you must `redeploy` the existing deployment id to publish. **There are two web-app deployments off the one project** (both execute-as-owner):
+
+- **Dashboard** — access = owner only, `DASHBOARD_TOKEN`-gated (URL needs `?k=<token>`).
+- **Entry app** — access = ANYONE, opened at `?view=entry`, PIN-gated. Kept separate so making it public never exposes the P&L; because both share `doGet`, the dashboard branch verifies `DASHBOARD_TOKEN` (see `dashboardAllowed_` in `Main.gs`). `clasp redeploy <entry-id>` preserves its ANYONE access.
+
+Redeploy each id you changed. New `Deploy → New deployment` with a different access level must be done in the editor UI (clasp uses the manifest's single access setting).
+
+**Secrets (Script Properties only, never in source):** `OPENAI_API_KEY`, `ENTRY_PIN_DREAM`, `ENTRY_PIN_PARADISE`, `DASHBOARD_TOKEN`.
 
 ### Cache gotcha
 
-`Aggregate.gs` caches the payload under `CACHE_KEY` in `CacheService` (10 min TTL). That cache is tied to the **script project, not the deployment**, so it survives `redeploy`. Whenever the payload shape or content changes, bump `CACHE_KEY` (e.g. `dash_v8` → `dash_v9`) or users see stale data until the old entry expires.
+`Aggregate.gs` caches the payload under `CACHE_KEY` in `CacheService` (10 min TTL). That cache is tied to the **script project, not the deployment**, so it survives `redeploy`. Whenever the payload shape or content changes, bump `CACHE_KEY` (currently `dash_v10`) or users see stale data until the old entry expires. The entry app's writers (`submitEntry`/`updateEntry`/`deleteEntry`) call `invalidateDashboardCache_` so a fresh entry shows on the next dashboard load without waiting out the TTL.
+
+## Daily entry app
+
+- **Same pure/thin split.** `Entry.gs`'s core (`resolveWriteCols_`, `buildEntryRow_`, `canonicalLayout_`, `findAppendRow_`) is Node-testable and **reuses the parser's own `detectSections_`/`colFor_`** so the write side lands in exactly the columns the read side reads. Thin GAS writers open the book, take a `LockService` lock, write cells, invalidate cache.
+- **Typo-proof by construction.** The picked date is written as a real `Date` object (hits `dayOf_`'s `v instanceof Date` fast path — no text parse) and the date also selects the target month tab (created with a canonical header row if missing), so a wrong month/day is impossible. Staff never touch header rows on app-created tabs.
+- **Additive only, per the parser invariant.** Expense gains an optional `Category` column that the parser prefers over `categorize()` when present; legacy tabs (no such header) stay byte-identical. A hidden `_entryId` column (inserted via `insertColumnAfter` on legacy tabs) makes edit/delete deterministic; the parser ignores it.
+- **Owner data in `Config.gs`:** `ROOMS_BY_HOTEL` feeds the room dropdown (fixed lists, no free-text guessing).
+- **Verify** with a Node harness that concatenates `Config.gs`+`Parser.gs`+`Entry.gs` and asserts a build→append→`parseTab_` round-trip (totals, `Σ days.rent == total`, `Σ nights == roomNights`, explicit-Category override, legacy fallback unchanged). The live sheet write can't run from a harness — end every change with one real submit per section on a scratch/real sheet and confirm the dashboard total moves and `validateAll()` shows no new flags.
 
 ## Data model notes
 

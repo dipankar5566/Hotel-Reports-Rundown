@@ -126,11 +126,22 @@ function resolveWriteCols_(values, section) {
     if (cols[k] === null || cols[k] === undefined) missing.push(k);
   });
   if (sec.dateCol === null || sec.dateCol === undefined) missing.push('date');
+  // Every column that belongs to this section (its date + all headered columns).
+  // A row is only a safe append target when ALL of these are empty — so a real
+  // booking that left 'amount' blank (e.g. an advance/due-only row) is not
+  // clobbered. Used by findAppendRow_.
+  var occ = [];
+  if (sec.dateCol !== null && sec.dateCol !== undefined) occ.push(sec.dateCol);
+  for (var hk in sec.heads) {
+    var hc = sec.heads[hk];
+    if (typeof hc === 'number' && occ.indexOf(hc) === -1) occ.push(hc);
+  }
   return {
     ok: missing.length === 0,
     headerRow: det.headerRow,
     dateCol: sec.dateCol,
     cols: cols,
+    occupancyCols: occ,
     missing: missing
   };
 }
@@ -158,13 +169,22 @@ function buildEntryRow_(section, form, cols) {
   return writes;
 }
 
-/** First data row index (0-based) at/after headerRow+1 whose amount cell is
- * empty — where this section's next row is appended. Returns values.length to
- * append a brand-new row past the end. */
-function findAppendRow_(values, headerRow, amountCol) {
+/** First data row index (0-based) at/after headerRow+1 where the section is
+ * entirely empty — where this section's next row is appended. `occCols` is the
+ * list of the section's own columns (from resolveWriteCols_.occupancyCols); a
+ * bare number is accepted as a single column for back-compat. A row counts as
+ * occupied if ANY of those columns holds a value, so a real booking with a
+ * blank amount cell (advance/due-only row) is never overwritten. Returns
+ * values.length to append past the end. */
+function findAppendRow_(values, headerRow, occCols) {
+  var cols = (typeof occCols === 'number') ? [occCols] : (occCols || []);
   for (var r = headerRow + 1; r < values.length; r++) {
-    var v = values[r][amountCol];
-    if (v === null || v === undefined || v === '') return r;
+    var used = false;
+    for (var i = 0; i < cols.length; i++) {
+      var v = values[r][cols[i]];
+      if (v !== null && v !== undefined && v !== '') { used = true; break; }
+    }
+    if (!used) return r;
   }
   return values.length;
 }
@@ -335,7 +355,7 @@ function submitEntry(payload) {
       res = ensureRemarkColumn_(sheet, values, res, norm.section);
       values = sheet.getDataRange().getValues(); // may have changed again
     }
-    var rowIdx = findAppendRow_(values, res.headerRow, res.cols.amount);
+    var rowIdx = findAppendRow_(values, res.headerRow, res.occupancyCols || res.cols.amount);
     var rowNum = rowIdx + 1;
     var entryId = Utilities.getUuid();
     writeEntryCells_(sheet, rowNum, norm.section, norm.form, res);

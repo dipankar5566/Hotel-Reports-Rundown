@@ -32,10 +32,10 @@ var MONTH_NAMES_ = ['JANUARY', 'FEBRUARY', 'MARCH', 'APRIL', 'MAY', 'JUNE',
 function canonicalLayout_(section) {
   if (section === 'rent') {
     return ['Date', 'Room with source', 'Source', 'Nights', 'Total revenue',
-            'Cash', 'Banking & UPI', 'GST', 'Due', 'Discount', '_entryId'];
+            'Cash', 'Banking & UPI', 'GST', 'Due', 'Discount', 'Remark', '_entryId'];
   }
   if (section === 'food') {
-    return ['Date', 'Room (food & others)', 'Amount', 'Cash', 'Banking & UPI', '_entryId'];
+    return ['Date', 'Room (food & others)', 'Amount', 'Cash', 'Banking & UPI', 'Remark', '_entryId'];
   }
   return ['Date', 'Particulers', 'Category', 'Amount', '_entryId']; // expense
 }
@@ -81,8 +81,10 @@ function entryFieldHeaders_(section) {
     map.gst = ['gst'];
     map.due = ['due'];
     map.discount = ['discount', 'dicount'];
+    map.remark = ['remark', 'remarks'];
   } else if (section === 'food') {
     map.room = ['room (food & others)', 'room'];
+    map.remark = ['remark', 'remarks'];
   } else { // expense
     map.particular = ['particulers', 'particulars'];
     map.category = ['category'];
@@ -98,8 +100,8 @@ function essentialFields_(section) {
 
 /** Ordered field list per section for building/writing a row. */
 function entryWriteFields_(section) {
-  if (section === 'rent') return ['room', 'source', 'nights', 'amount', 'cash', 'bank', 'gst', 'due', 'discount'];
-  if (section === 'food') return ['room', 'amount', 'cash', 'bank'];
+  if (section === 'rent') return ['room', 'source', 'nights', 'amount', 'cash', 'bank', 'gst', 'due', 'discount', 'remark'];
+  if (section === 'food') return ['room', 'amount', 'cash', 'bank', 'remark'];
   return ['particular', 'category', 'amount']; // expense
 }
 
@@ -249,6 +251,22 @@ function ensureEntryIdColumn_(sheet, values, res, section) {
   return resolveWriteCols_(fresh, section);
 }
 
+/** Rent/food only: ensure a 'Remark' column exists so free-text notes land in a
+ * real column the parser reads. Canonical app tabs and real staff tabs already
+ * have it; this only fires on app tabs created before Remark existed. Inserted
+ * immediately LEFT of _entryId so it stays inside the section's detect window.
+ * Returns a re-resolved cols object. */
+function ensureRemarkColumn_(sheet, values, res, section) {
+  if (section === 'expense') return res;
+  if (res.cols.remark !== null && res.cols.remark !== undefined) return res;
+  var idCol = res.cols.entryId;
+  if (idCol === null || idCol === undefined) return res; // no anchor -> skip (remark dropped gracefully)
+  sheet.insertColumnBefore(idCol + 1);                   // 1-based; pushes _entryId right by one
+  sheet.getRange(res.headerRow + 1, idCol + 1).setValue('Remark');
+  var fresh = sheet.getDataRange().getValues();
+  return resolveWriteCols_(fresh, section);
+}
+
 /** Write one entry's cells into rowNum (1-based). Blank optionals are cleared
  * to '' so an edit that removes a value takes effect. Date gets a date-only
  * number format. */
@@ -313,6 +331,10 @@ function submitEntry(payload) {
     }
     res = ensureEntryIdColumn_(sheet, values, res, norm.section);
     values = sheet.getDataRange().getValues(); // may have changed after insert
+    if (norm.form.remark) {
+      res = ensureRemarkColumn_(sheet, values, res, norm.section);
+      values = sheet.getDataRange().getValues(); // may have changed again
+    }
     var rowIdx = findAppendRow_(values, res.headerRow, res.cols.amount);
     var rowNum = rowIdx + 1;
     var entryId = Utilities.getUuid();
@@ -418,6 +440,9 @@ function updateEntry(payload) {
     var hit = findEntryById_(ss, norm.year, norm.month, entryId);
     if (!hit) throw new Error('Entry not found (it may have been changed in the sheet).');
     if (hit.section !== norm.section) throw new Error('Cannot move an entry between sections.');
+    if (norm.form.remark && (hit.section === 'rent' || hit.section === 'food')) {
+      hit.res = ensureRemarkColumn_(hit.sheet, hit.sheet.getDataRange().getValues(), hit.res, hit.section);
+    }
     writeEntryCells_(hit.sheet, hit.rowNum, hit.section, norm.form, hit.res);
     invalidateDashboardCache_();
     return { ok: true, entryId: entryId, tab: hit.sheet.getName(), row: hit.rowNum };

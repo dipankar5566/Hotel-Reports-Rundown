@@ -177,13 +177,17 @@ function parseTab_(values, year, month) {
       : null;
     var dueCol = colFor_(heads, ['due']);
     var discCol = colFor_(heads, ['discount', 'dicount']);
+    // Free-text remark on rent/food rows (staff sheets already carry it). Read
+    // additively into remarkRows; never touches any total, so the pivot invariant holds.
+    var remarkCol = (t === 'rent' || t === 'food') ? colFor_(heads, ['remark', 'remarks']) : null;
     if (amtCol === null) {
       out.flags.push(t + ': no amount column');
       return;
     }
     var s = { type: t, rows: 0, total: 0, cash: 0, bank: 0, gst: 0,
               nights: 0, due: 0, discount: 0,
-              days: {}, cats: {}, catRows: {}, sources: {}, nightsByDay: {} };
+              days: {}, cats: {}, catRows: {}, sources: {}, nightsByDay: {},
+              remarkRows: [] };
     var lastDay = null;
     for (var r = det.headerRow + 1; r < values.length; r++) {
       var row = values[r];
@@ -236,6 +240,17 @@ function parseTab_(values, year, month) {
           src = 'OYO';
         }
         s.sources[src] = (s.sources[src] || 0) + amt;
+      }
+      // Capture only remark-bearing rent/food rows (keeps payload small; empty
+      // notes carry no drill/AI value). roomCol resolves for both sections.
+      if ((t === 'rent' || t === 'food') && remarkCol !== null) {
+        var rmk = String(row[remarkCol] == null ? '' : row[remarkCol]).replace(/\s+/g, ' ').trim();
+        if (rmk) {
+          var roomLbl = roomCol !== null
+            ? String(row[roomCol] == null ? '' : row[roomCol]).replace(/\s+/g, ' ').trim()
+            : '';
+          s.remarkRows.push({ day: d, room: roomLbl, amount: amt, remark: rmk });
+        }
       }
     }
     out.sections.push(s);

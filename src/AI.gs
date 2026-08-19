@@ -110,6 +110,21 @@ function buildAiInput_(curMonth, prevMonth, trendMonths, meta) {
   var truncated = rows.length > AI_MAX_EXPENSE_ROWS;
   if (truncated) rows = rows.slice(0, AI_MAX_EXPENSE_ROWS);
 
+  // Free-text remarks staff attached to rent/food rows: context for the summary,
+  // never anomalies. Capped with the same budget as expense line items.
+  var remarkRows = [];
+  ['rentRemarkRows', 'foodRemarkRows'].forEach(function (key) {
+    (curMonth[key] || []).forEach(function (r) {
+      remarkRows.push({
+        section: key === 'rentRemarkRows' ? 'rent' : 'food',
+        day: r.day, room: r.room, amount: Math.round(r.amount),
+        remark: r.remark, hotel: r.hotel
+      });
+    });
+  });
+  remarkRows.sort(function (a, b) { return (a.day || 0) - (b.day || 0); });
+  if (remarkRows.length > AI_MAX_EXPENSE_ROWS) remarkRows = remarkRows.slice(0, AI_MAX_EXPENSE_ROWS);
+
   var m = meta || {};
   var comparisonBasis = m.partial
     ? ('SAME-DATE: "current" covers the first ' + m.cutoffDay + ' days of the month so far, and "previous"/"trend" have each been recomputed to the SAME first ' + m.cutoffDay + ' days of their month for a like-for-like comparison. Do NOT describe the current month as smaller/declining just because it is mid-month - the prior figures are already cut to the same day count. Fields shown as null in "previous" (gst, dues, cash) have no same-date value; never compare those across months.')
@@ -125,7 +140,8 @@ function buildAiInput_(curMonth, prevMonth, trendMonths, meta) {
     categoryStats: catStats(curMonth),
     expenseLineItems: rows,
     expenseLineItemCount: rows.length,
-    expenseLineItemsTruncated: truncated
+    expenseLineItemsTruncated: truncated,
+    revenueRemarks: remarkRows
   };
 }
 
@@ -204,6 +220,7 @@ function buildOpenAiRequest_(compact) {
     'Task 3 - recommendations: give a short, prioritized list of concrete actions the owner can actually take, each grounded in the given numbers (cut a named cost, chase a specific due, adjust the room rate given occupancy/ADR, fix a GST gap). Order by priority. Return an empty array if the data genuinely warrants no action - never pad the list.',
     'Task 4 - anomalies: review ONLY the "expenseLineItems" array and flag entries that look like possible bookkeeping mistakes. Judge outliers against that category\'s baseline in "categoryStats" (count/mean/max/stddev) - e.g. an amount far above the category mean, likely-duplicate entries on the same day/amount, or a particular that does not match its assigned category. Do not put rent/food-revenue or category-level trend commentary here - that belongs in summary/trend.',
     'If nothing looks anomalous, return an empty anomalies array. Never invent an anomaly to fill the list.',
+    '"revenueRemarks" are free-text notes staff attached to individual rent/food rows (e.g. reason for a discount, an advance taken, a guest complaint). Use them ONLY to enrich the summary and recommendations - never place them in the anomalies array (that array is expense line-items only).',
     'Use ONLY the numbers present in the JSON provided. Never invent, estimate, or assume a figure that is not given. If "previous" is null, do not fabricate a month-over-month comparison.',
     'Output must strictly match the provided JSON schema.'
   ].join(' ');

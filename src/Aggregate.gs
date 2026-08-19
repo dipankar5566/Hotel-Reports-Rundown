@@ -3,7 +3,7 @@
  * with gzip'd CacheService caching (payload exceeds the 100KB plain limit).
  */
 
-var CACHE_KEY = 'dash_v10'; // v10: entry app + additive expense Category parse
+var CACHE_KEY = 'dash_v11'; // v11: rent/food Remark per-row carrier (rentRemarkRows/foodRemarkRows)
 var CACHE_SECS = 600; // 10 min
 
 function getDashboardData(forceRefresh) {
@@ -81,6 +81,8 @@ function buildPayloadFromBooks_(books, errors) {
         rentBySource: {},
         expByCat: {},
         expByCatRows: {}, // category -> [{ day, particular, amount, hotel }]
+        rentRemarkRows: [], // [{ day, room, amount, remark, hotel }]
+        foodRemarkRows: [], // [{ day, room, amount, remark, hotel }]
         // per-day: { d: {rev, exp} }
         days: {},
         flags: parsed.flags.slice(0, 40)
@@ -108,6 +110,11 @@ function buildPayloadFromBooks_(books, errors) {
             entry.days[d] = entry.days[d] || { rev: 0, exp: 0, rent: 0, nights: 0 };
             entry.days[d].nights += s.nightsByDay[d]; // room-nights per day (for same-date occupancy)
           }
+          if (s.remarkRows && s.remarkRows.length) {
+            entry.rentRemarkRows = entry.rentRemarkRows.concat(s.remarkRows.map(function (r) {
+              return { day: r.day, room: r.room, amount: r.amount, remark: r.remark, hotel: h.hotel };
+            }));
+          }
         } else if (s.type === 'food') {
           entry.food += s.total;
           entry.cashIn += s.cash;
@@ -115,6 +122,11 @@ function buildPayloadFromBooks_(books, errors) {
           for (d in s.days) {
             entry.days[d] = entry.days[d] || { rev: 0, exp: 0, rent: 0, nights: 0 };
             entry.days[d].rev += s.days[d];
+          }
+          if (s.remarkRows && s.remarkRows.length) {
+            entry.foodRemarkRows = entry.foodRemarkRows.concat(s.remarkRows.map(function (r) {
+              return { day: r.day, room: r.room, amount: r.amount, remark: r.remark, hotel: h.hotel };
+            }));
           }
         } else if (s.type === 'expense') {
           entry.expense += s.total;

@@ -181,6 +181,12 @@
       </div>
     </div>
 
+    <div class="panel">
+      <h2 id="remarkTitle">Booking &amp; food notes</h2>
+      <div id="remarkList"></div>
+      <div class="note">Free-text remarks staff attached to rent &amp; food rows this month.</div>
+    </div>
+
     <div class="grid2">
       <div class="panel">
         <h2 id="moneyTitle">Money control</h2>
@@ -269,7 +275,8 @@ function monthsInScope() {
                      roomNights: 0, cashIn: 0, bankIn: 0, gst: 0,
                      salary: 0, foodCost: 0, totalCost: 0, rooms: 0, daysElapsed: 0, daysInMonth: 0,
                      dueTotal: 0, discountTotal: 0,
-                     expByCat: {}, expByCatRows: {}, rentBySource: {}, days: {}, hotels: [] };
+                     expByCat: {}, expByCatRows: {}, rentRemarkRows: [], foodRemarkRows: [],
+                     rentBySource: {}, days: {}, hotels: [] };
     }
     var t = byYM[m.ym];
     t.revenue += m.revenue; t.rent += m.rent; t.food += m.food;
@@ -287,6 +294,8 @@ function monthsInScope() {
       if (!t.expByCatRows[k]) t.expByCatRows[k] = [];
       t.expByCatRows[k] = t.expByCatRows[k].concat(m.expByCatRows[k]);
     }
+    t.rentRemarkRows = t.rentRemarkRows.concat(m.rentRemarkRows || []);
+    t.foodRemarkRows = t.foodRemarkRows.concat(m.foodRemarkRows || []);
     for (k in m.rentBySource) t.rentBySource[k] = (t.rentBySource[k] || 0) + m.rentBySource[k];
     for (k in m.days) {
       if (!t.days[k]) t.days[k] = { rev: 0, exp: 0 };
@@ -411,6 +420,7 @@ function render() {
   drawMix(cur);
   drawMoney(cur);
   drawFood(cur);
+  drawRemarks(cur);
   drawYoY(months);
   drawTable();
   drawFlags();
@@ -807,6 +817,33 @@ function showCatDrill(label) {
 function hideCatDrill() {
   document.getElementById('catDrill').style.display = 'none';
   document.getElementById('catHint').style.display = 'block';
+}
+
+// Booking & food notes: merged rent+food remark rows for the selected month.
+// Mirrors showCatDrill's row markup; free text is escaped.
+function drawRemarks(cur) {
+  document.getElementById('remarkTitle').textContent = 'Booking & food notes — ' + ymLabel(cur.ym);
+  var showHotel = scope === 'Both';
+  var monAbbr = ymLabel(cur.ym).split(' ')[0];
+  function tag(sec) {
+    return function (r) {
+      return { day: r.day, room: r.room, amount: r.amount, remark: r.remark, hotel: r.hotel, sec: sec };
+    };
+  }
+  var rows = (cur.rentRemarkRows || []).map(tag('Rent'))
+    .concat((cur.foodRemarkRows || []).map(tag('Food')));
+  rows.sort(function (a, b) { return (a.day - b.day) || (b.amount - a.amount); });
+  document.getElementById('remarkList').innerHTML = rows.length
+    ? rows.map(function (r) {
+        var dateLbl = r.day + ' ' + monAbbr;
+        var hotelTag = showHotel && r.hotel ? '<span class="drilltag">' + escapeHtml(r.hotel) + '</span>' : '';
+        var secTag = '<span class="drilltag">' + r.sec + '</span>';
+        var roomLbl = r.room ? ' ' + escapeHtml(r.room) : '';
+        return '<div class="drillrow"><span><span class="drilldate">' + dateLbl + '</span>' +
+          secTag + hotelTag + roomLbl + ' — ' + escapeHtml(r.remark) +
+          '</span><span class="dv">' + inr(r.amount) + '</span></div>';
+      }).join('')
+    : '<div class="drillrow">No rent or food remarks recorded this month.</div>';
 }
 
 function drawMix(cur) {

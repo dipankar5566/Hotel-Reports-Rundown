@@ -73,9 +73,11 @@
 
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center">
-        <strong>This month's app entries</strong>
+        <strong>App entries</strong>
         <button class="mini ed" id="refreshBtn">Refresh</button>
       </div>
+      <label>View month</label>
+      <select id="listMonth"></select>
       <div id="entries"><p class="muted">—</p></div>
     </div>
 
@@ -112,13 +114,15 @@ var FIELD_DEFS = {
     { key: 'bank', label: 'Banking & UPI (Rs)', type: 'number' },
     { key: 'gst', label: 'GST (Rs)', type: 'number' },
     { key: 'due', label: 'Due (Rs)', type: 'number' },
-    { key: 'discount', label: 'Discount (Rs)', type: 'number' }
+    { key: 'discount', label: 'Discount (Rs)', type: 'number' },
+    { key: 'remark', label: 'Remark (optional)', type: 'text' }
   ],
   food: [
     { key: 'room', label: 'Room / table', type: 'select', src: 'rooms', req: true },
     { key: 'amount', label: 'Amount (Rs)', type: 'number', req: true },
     { key: 'cash', label: 'Cash (Rs)', type: 'number' },
-    { key: 'bank', label: 'Banking & UPI (Rs)', type: 'number' }
+    { key: 'bank', label: 'Banking & UPI (Rs)', type: 'number' },
+    { key: 'remark', label: 'Remark (optional)', type: 'text' }
   ],
   expense: [
     { key: 'category', label: 'Category', type: 'select', src: 'categories', req: true },
@@ -156,6 +160,7 @@ $('unlockBtn').onclick = function () {
       $('pinScreen').classList.add('hidden');
       $('app').classList.remove('hidden');
       $('entryDate').value = todayIso();
+      buildMonthList();
       selectSection('rent');
       loadEntries();
     })
@@ -243,6 +248,7 @@ $('saveBtn').onclick = function () {
   $('saveBtn').disabled = true;
   var editing = STATE.editingId;
   if (editing) payload.entryId = editing;
+  var savedYm = payload.date.year + '-' + (payload.date.month < 10 ? '0' : '') + payload.date.month;
   var runner = google.script.run
     .withSuccessHandler(function () {
       $('saveBtn').disabled = false;
@@ -250,6 +256,7 @@ $('saveBtn').onclick = function () {
       STATE.editingId = null;
       buildFields();       // clear entered values for the next row
       updateSaveLabel();
+      if (!editing) ensureListMonth(savedYm); // jump the list to the month we saved into
       loadEntries();
     })
     .withFailureHandler(function (err) {
@@ -264,11 +271,41 @@ function currentYm() {
   var p = v.split('-'); return p[0] + '-' + p[1];
 }
 
+// The "View month" selector drives the listing, decoupled from the new-entry
+// date field so staff can review/edit/delete past months without changing the date.
+function ymOptionLabel(y, m) {
+  return new Date(y, m - 1, 1).toLocaleString('en-US', { month: 'long', year: 'numeric' });
+}
+function buildMonthList() {
+  var sel = $('listMonth'); sel.innerHTML = '';
+  var now = new Date();
+  for (var i = 0; i < 12; i++) {
+    var d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    var mm = d.getMonth() + 1;
+    var opt = document.createElement('option');
+    opt.value = d.getFullYear() + '-' + (mm < 10 ? '0' : '') + mm;
+    opt.textContent = ymOptionLabel(d.getFullYear(), mm);
+    sel.appendChild(opt);
+  }
+  sel.value = todayIso().slice(0, 7); // default to the current month
+}
+function listYm() { return $('listMonth').value || currentYm(); }
+function ensureListMonth(ym) {
+  var sel = $('listMonth');
+  for (var i = 0; i < sel.options.length; i++) {
+    if (sel.options[i].value === ym) { sel.value = ym; return; }
+  }
+  var pr = ym.split('-');
+  var opt = document.createElement('option');
+  opt.value = ym; opt.textContent = ymOptionLabel(Number(pr[0]), Number(pr[1]));
+  sel.appendChild(opt); sel.value = ym;
+}
+
 $('refreshBtn').onclick = loadEntries;
-$('entryDate').onchange = loadEntries;
+$('listMonth').onchange = loadEntries;
 
 function loadEntries() {
-  var ym = currentYm(); if (!ym) return;
+  var ym = listYm(); if (!ym) return;
   $('entries').innerHTML = '<p class="muted">Loading...</p>';
   google.script.run
     .withSuccessHandler(renderEntries)
@@ -304,7 +341,7 @@ function startEdit(e) {
   buildFields(e.fields || {});
   updateSaveLabel();
   if (e.day) {
-    var ym = currentYm().split('-');
+    var ym = listYm().split('-');
     var p = function (n) { return (n < 10 ? '0' : '') + n; };
     $('entryDate').value = ym[0] + '-' + ym[1] + '-' + p(e.day);
   }
@@ -316,7 +353,7 @@ function doDelete(e) {
   google.script.run
     .withSuccessHandler(function () { toast('Deleted.'); loadEntries(); })
     .withFailureHandler(function (err) { toast(err && err.message ? err.message : String(err), true); })
-    .deleteEntry(STATE.hotel, STATE.pin, currentYm(), e.entryId);
+    .deleteEntry(STATE.hotel, STATE.pin, listYm(), e.entryId);
 }
 
 $('lockBtn').onclick = function () {

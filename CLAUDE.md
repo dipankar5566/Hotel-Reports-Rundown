@@ -68,9 +68,9 @@ clasp redeploy <DEPLOYMENT_ID>
 `clasp push` alone updates the editor project but not the live URL — you must `redeploy` the existing deployment id to publish. **There are two web-app deployments off the one project** (both execute-as-owner):
 
 - **Dashboard** — access = owner only, `DASHBOARD_TOKEN`-gated (URL needs `?k=<token>`).
-- **Entry app** — access = ANYONE, opened at `?view=entry`, PIN-gated. Kept separate so making it public never exposes the P&L; because both share `doGet`, the dashboard branch verifies `DASHBOARD_TOKEN` (see `dashboardAllowed_` in `Main.gs`). `clasp redeploy <entry-id>` preserves its ANYONE access.
+- **Entry app** — access = ANYONE (anonymous), opened at `?view=entry`, PIN-gated. Kept separate so making it public never exposes the P&L; because both share `doGet`, the dashboard branch verifies `DASHBOARD_TOKEN` (see `dashboardAllowed_` in `Main.gs`).
 
-Redeploy each id you changed. New `Deploy → New deployment` with a different access level must be done in the editor UI (clasp uses the manifest's single access setting).
+**⚠️ Access-clobber gotcha.** The manifest (`appsscript.json`) has a **single** `webapp.access` field (currently `MYSELF`), but the two deployments need **different** access (dashboard = owner-only, entry = anyone). A plain `clasp redeploy <entry-id>` re-applies the manifest's `MYSELF` and silently breaks the entry app — staff then get a Drive "Sorry, unable to open the file at this time" error (the signed-in Gmail can't open an owner-only script). So **manage the entry deployment's access in the editor UI**, not via clasp: Deploy → Manage deployments → entry deployment → pencil → Who has access = **Anyone** → Deploy (edits the existing deployment, keeps the same `/exec` URL). If you must use clasp, do the flip-dance: set manifest `access` = `ANYONE_ANONYMOUS`, `clasp push -f`, `clasp redeploy <entry-id>`; then set it back to `MYSELF`, `clasp push -f`, `clasp redeploy <dashboard-id>` (redeploying only the dashboard id leaves the entry deployment untouched). Redeploy each id you changed.
 
 **Secrets (Script Properties only, never in source):** `OPENAI_API_KEY`, `ENTRY_PIN_DREAM`, `ENTRY_PIN_PARADISE`, `DASHBOARD_TOKEN`.
 

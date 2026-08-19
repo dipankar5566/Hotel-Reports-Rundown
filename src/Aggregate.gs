@@ -3,7 +3,7 @@
  * with gzip'd CacheService caching (payload exceeds the 100KB plain limit).
  */
 
-var CACHE_KEY = 'dash_v11'; // v11: rent/food Remark per-row carrier (rentRemarkRows/foodRemarkRows)
+var CACHE_KEY = 'dash_v12'; // v12: room-nights exclude non-room rent lines (blank/ADVANCE)
 var CACHE_SECS = 600; // 10 min
 
 function getDashboardData(forceRefresh) {
@@ -95,7 +95,7 @@ function buildPayloadFromBooks_(books, errors) {
           entry.rent += s.total;
           entry.gst += s.gst;
           entry.bookings += s.rows;
-          entry.roomNights += s.nights > 0 ? s.nights : s.rows;
+          entry.roomNights += s.nights > 0 ? s.nights : (s.roomRows || 0);
           entry.cashIn += s.cash;
           entry.bankIn += s.bank;
           for (d in s.sources) {

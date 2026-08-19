@@ -142,6 +142,17 @@ function colFor_(heads, cands) {
   return null;
 }
 
+// A rent line counts toward room-nights only if its room cell names a real let
+// room. Blank rows and non-room markers (ADVANCE/DUE/etc.) carry a total but are
+// not a room-night, so they must not inflate occupancy. Named rooms like
+// "BAR AREA"/"T-20" are kept — only explicit non-room tokens are dropped.
+function isRealRoom_(v) {
+  if (v === null || v === undefined) return false;
+  var s = String(v).replace(/\s+/g, ' ').trim();
+  if (s === '' || s === '-') return false;
+  return !/^(advance|adv|due|dues|deposit|extra|misc|n\/?a|total|grand total)$/i.test(s);
+}
+
 /**
  * Parse one tab. Returns:
  * { sections: [{type, rows, total, cash, bank, gst, days:{d:amt}, cats:{cat:amt},
@@ -184,7 +195,7 @@ function parseTab_(values, year, month) {
       out.flags.push(t + ': no amount column');
       return;
     }
-    var s = { type: t, rows: 0, total: 0, cash: 0, bank: 0, gst: 0,
+    var s = { type: t, rows: 0, roomRows: 0, total: 0, cash: 0, bank: 0, gst: 0,
               nights: 0, due: 0, discount: 0,
               days: {}, cats: {}, catRows: {}, sources: {}, nightsByDay: {},
               remarkRows: [] };
@@ -211,7 +222,10 @@ function parseTab_(values, year, month) {
       if (cashCol !== null) { var cv = num_(row[cashCol]); if (cv) s.cash += cv; }
       if (bankCol !== null) { var bv = num_(row[bankCol]); if (bv) s.bank += bv; }
       if (gstCol !== null) { var gv = num_(row[gstCol]); if (gv) s.gst += gv; }
-      if (nightsCol !== null) {
+      // Room-nights count real let rooms only (never blank/ADVANCE lines). Only
+      // rent rows have a room; other sections keep isRoom = true (no effect).
+      var isRoom = (t === 'rent') ? (roomCol === null ? true : isRealRoom_(row[roomCol])) : true;
+      if (nightsCol !== null && isRoom) {
         var nv = num_(row[nightsCol]);
         var nnight = (nv && nv > 0 && nv < 100) ? nv : 1; // text/blank/garbage -> 1 night
         s.nights += nnight;
@@ -233,6 +247,7 @@ function parseTab_(values, year, month) {
         }
       }
       if (t === 'rent') {
+        if (isRoom) s.roomRows++; // real-room booking count (roomNights fallback when no Nights column)
         var src = 'Walk-in';
         if (srcCol !== null) {
           src = /oyo/i.test(String(row[srcCol])) ? 'OYO' : 'Walk-in';

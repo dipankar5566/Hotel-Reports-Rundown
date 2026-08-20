@@ -3,7 +3,7 @@
  * with gzip'd CacheService caching (payload exceeds the 100KB plain limit).
  */
 
-var CACHE_KEY = 'dash_v12'; // v12: room-nights exclude non-room rent lines (blank/ADVANCE)
+var CACHE_KEY = 'dash_v15'; // v15: expense's expByCatRows[cat].particular now sources from the Remark cell (description) instead of the Particulars cell (which now holds the category itself) — Parser.gs expense redesign
 var CACHE_SECS = 600; // 10 min
 
 function getDashboardData(forceRefresh) {
@@ -146,6 +146,10 @@ function buildPayloadFromBooks_(books, errors) {
           }
         }
       });
+      // Recovery money is already counted here: Entry.gs's adjustDueCell_
+      // mutates the LINKED booking row's own Cash/Bank cells at write time,
+      // so it flows into cashIn/bankIn through the normal rent-row s.cash/
+      // s.bank accumulation above — no separate recovery accumulation needed.
       for (var dnum in entry.days) {
         entry.days[dnum].net = entry.days[dnum].rev - entry.days[dnum].exp;
       }

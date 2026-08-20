@@ -146,9 +146,7 @@ function buildAiInput_(curMonth, prevMonth, trendMonths, meta) {
 }
 
 function getKnownCategories_() {
-  var cats = CATEGORY_RULES.map(function (r) { return r[1]; });
-  cats.push('General & Misc');
-  return cats.filter(function (c, i) { return cats.indexOf(c) === i; });
+  return knownCategories_(); // Config.gs — single source of truth, also used by Parser.gs
 }
 
 // Built lazily (not a top-level var) because it depends on CATEGORY_RULES

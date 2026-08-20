@@ -37,6 +37,31 @@
   .mini.del { background:#fee2e2; color:var(--danger); }
   .mini.ed { background:#e7e5e4; color:#1c1917; }
   .muted { color:var(--muted); font-size:13px; }
+  .tiles { display:flex; gap:8px; margin:12px 0; }
+  .tile { flex:1; background:#f5f5f4; border:1px solid var(--line); border-radius:8px; padding:10px; text-align:center; }
+  .tile .k { font-size:11px; text-transform:uppercase; color:var(--muted); }
+  .tile .v { font-size:16px; font-weight:700; font-variant-numeric:tabular-nums; margin-top:2px; }
+  .tile.out .v { color:var(--danger); }
+  table.rep { width:100%; border-collapse:collapse; font-size:13px; }
+  table.rep th, table.rep td { padding:6px 4px; text-align:right; border-top:1px solid var(--line); font-variant-numeric:tabular-nums; }
+  table.rep th:first-child, table.rep td:first-child { text-align:left; }
+  table.rep th { color:var(--muted); font-weight:600; border-top:none; }
+  table.rep tr.today td { background:#ecfdf5; font-weight:600; }
+  table.rep tr.tot td { border-top:2px solid var(--muted); font-weight:700; }
+  .party { padding:10px 0; border-top:1px solid var(--line); cursor:pointer; }
+  .party .top { display:flex; align-items:center; gap:8px; }
+  .party .nm { flex:1; font-weight:600; }
+  .party .ob { font-variant-numeric:tabular-nums; font-weight:700; }
+  .party .ob.clear { color:var(--muted); font-weight:600; }
+  .party .lines { margin-top:6px; font-size:12px; color:var(--muted); }
+  .party .lines .ln { display:flex; justify-content:space-between; padding:2px 0; }
+  .party .lines .ln.rec { color:var(--teal); }
+  .tablewrap { overflow-x:auto; }
+  #duePicker { margin-bottom:14px; padding-bottom:10px; border-bottom:1px dashed var(--line); }
+  #dueResults { max-height:220px; overflow-y:auto; }
+  #dueResults .party { padding:8px 0; }
+  #dueLinked { padding:8px 0; font-size:13px; color:var(--muted); }
+  #dueLinked a { color:var(--teal); font-weight:600; }
 </style>
 
 <div class="wrap">
@@ -58,32 +83,58 @@
 
   <!-- ---- entry app ---- -->
   <div id="app" class="hidden">
-    <div class="card">
-      <div class="chips" id="sectionChips"></div>
-
-      <label>Date</label>
-      <input id="entryDate" type="date">
-
-      <div id="fields"></div>
-
-      <div style="height:16px"></div>
-      <button class="primary" id="saveBtn">Save entry</button>
-      <p class="muted hidden" id="editHint" style="margin-top:10px"></p>
+    <div class="chips" id="navChips">
+      <div class="chip on" id="navEntry">Entry</div>
+      <div class="chip" id="navDash">Dashboard</div>
     </div>
 
-    <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:center">
-        <strong>App entries</strong>
-        <button class="mini ed" id="refreshBtn">Refresh</button>
+    <!-- === ENTRY view === -->
+    <div id="entryView">
+      <div class="card">
+        <div class="chips" id="sectionChips"></div>
+
+        <label>Date</label>
+        <input id="entryDate" type="date">
+
+        <div id="fields"></div>
+
+        <div style="height:16px"></div>
+        <button class="primary" id="saveBtn">Save entry</button>
+        <p class="muted hidden" id="editHint" style="margin-top:10px"></p>
       </div>
-      <label>View month</label>
-      <select id="listMonth"></select>
-      <div id="entries"><p class="muted">—</p></div>
+
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <strong>App entries</strong>
+          <button class="mini ed" id="refreshBtn">Refresh</button>
+        </div>
+        <label>View month</label>
+        <select id="listMonth"></select>
+        <div id="entries"><p class="muted">—</p></div>
+      </div>
+    </div>
+
+    <!-- === DASHBOARD view === -->
+    <div id="dashView" class="hidden">
+      <div class="card">
+        <strong>Daily report</strong>
+        <label>Month</label>
+        <select id="repMonth"></select>
+        <div id="repTable"><p class="muted">—</p></div>
+      </div>
+
+      <div class="card">
+        <strong>Due tracker</strong>
+        <div class="chips" id="scopeChips" style="margin-top:8px"></div>
+        <div id="dueTiles"></div>
+        <div id="partyList"><p class="muted">—</p></div>
+      </div>
     </div>
 
     <button class="mini ed" id="lockBtn" style="width:100%">Lock</button>
   </div>
 </div>
+<datalist id="partiesDatalist"></datalist>
 
 <script>
 // ---- inline web-app manifest (installable icon; online-only v1) ----
@@ -115,6 +166,7 @@ var FIELD_DEFS = {
     { key: 'gst', label: 'GST (Rs)', type: 'number' },
     { key: 'due', label: 'Due (Rs)', type: 'number' },
     { key: 'discount', label: 'Discount (Rs)', type: 'number' },
+    { key: 'party', label: 'Guest / party (name a due)', type: 'text' },
     { key: 'remark', label: 'Remark (optional)', type: 'text' }
   ],
   food: [
@@ -126,8 +178,21 @@ var FIELD_DEFS = {
   ],
   expense: [
     { key: 'category', label: 'Category', type: 'select', src: 'categories', req: true },
-    { key: 'particular', label: 'Particular (description)', type: 'text', req: true },
-    { key: 'amount', label: 'Amount (Rs)', type: 'number', req: true }
+    { key: 'amount', label: 'Amount (Rs)', type: 'number', req: true },
+    { key: 'remark', label: 'Remark (optional)', type: 'text' }
+  ],
+  recovery: [
+    // dueRef is the hard link (the paid-down rent row's own _entryId) — not
+    // staff-typed, only set by picking a row from the open-dues list built by
+    // buildDuePicker(). Left blank when staff types the party directly instead
+    // (legacy/unlisted due), which is the "Other / not listed" fallback.
+    { key: 'dueRef', label: '', type: 'hidden' },
+    { key: 'party', label: 'Recovered from (party)', type: 'text', req: true, list: 'partiesDatalist' },
+    { key: 'room', label: 'Room (optional)', type: 'select', src: 'rooms' },
+    { key: 'amount', label: 'Amount recovered (Rs)', type: 'number', req: true },
+    { key: 'cash', label: 'Cash (Rs)', type: 'number' },
+    { key: 'bank', label: 'Banking & UPI (Rs)', type: 'number' },
+    { key: 'remark', label: 'Remark (optional)', type: 'text' }
   ]
 };
 
@@ -163,6 +228,7 @@ $('unlockBtn').onclick = function () {
       buildMonthList();
       selectSection('rent');
       loadEntries();
+      loadDues(); // primes the recovery party datalist + caches the tracker
     })
     .withFailureHandler(function (err) {
       $('unlockBtn').disabled = false;
@@ -173,7 +239,8 @@ $('unlockBtn').onclick = function () {
 
 function buildSectionChips() {
   var box = $('sectionChips'); box.innerHTML = '';
-  ['rent', 'food', 'expense'].forEach(function (sec) {
+  var secs = (STATE.config && STATE.config.sections) || ['rent', 'food', 'expense', 'recovery'];
+  secs.forEach(function (sec) {
     var b = document.createElement('div');
     b.className = 'chip' + (sec === STATE.section ? ' on' : '');
     b.textContent = sec.charAt(0).toUpperCase() + sec.slice(1);
@@ -193,26 +260,111 @@ function selectSection(sec) {
 function buildFields(prefill) {
   var box = $('fields'); box.innerHTML = '';
   FIELD_DEFS[STATE.section].forEach(function (def) {
-    var lab = document.createElement('label');
-    lab.textContent = def.label + (def.req ? ' *' : '');
-    box.appendChild(lab);
     var el;
-    if (def.type === 'select') {
-      el = document.createElement('select');
-      var opts = STATE.config[def.src] || [];
-      if (!def.req) { var blank = document.createElement('option'); blank.value = ''; blank.textContent = '-'; el.appendChild(blank); }
-      opts.forEach(function (o) {
-        var op = document.createElement('option'); op.value = o; op.textContent = o; el.appendChild(op);
-      });
+    if (def.type === 'hidden') {
+      el = document.createElement('input'); el.type = 'hidden';
     } else {
-      el = document.createElement('input');
-      el.type = def.type === 'number' ? 'number' : 'text';
-      if (def.type === 'number') { el.inputMode = 'decimal'; el.min = '0'; }
+      var lab = document.createElement('label');
+      lab.textContent = def.label + (def.req ? ' *' : '');
+      box.appendChild(lab);
+      if (def.type === 'select') {
+        el = document.createElement('select');
+        var opts = STATE.config[def.src] || [];
+        if (!def.req) { var blank = document.createElement('option'); blank.value = ''; blank.textContent = '-'; el.appendChild(blank); }
+        opts.forEach(function (o) {
+          var op = document.createElement('option'); op.value = o; op.textContent = o; el.appendChild(op);
+        });
+      } else {
+        el = document.createElement('input');
+        el.type = def.type === 'number' ? 'number' : 'text';
+        if (def.type === 'number') { el.inputMode = 'decimal'; el.min = '0'; }
+        if (def.list) el.setAttribute('list', def.list); // datalist of outstanding parties
+      }
     }
     el.id = 'f_' + def.key;
     if (prefill && prefill[def.key] !== undefined && prefill[def.key] !== null) el.value = prefill[def.key];
     box.appendChild(el);
   });
+  if (STATE.section === 'recovery') buildDuePicker();
+}
+
+// ---- recovery: pick-from-open-dues picker (hard link), not a native <select>
+// (which renders as a one-row-at-a-time iOS wheel for more than a few items).
+// Search-filters DASH.dues.openDues (already fetched via getDuesTracker on
+// unlock/after-save — no extra RPC) and, on tap, fills party/room/amount and
+// sets the hidden f_dueRef. Staff can still ignore it and type party directly
+// (the "Other / not listed" fallback — dueRef just stays blank).
+function buildDuePicker() {
+  var box = $('fields');
+  var wrap = document.createElement('div'); wrap.id = 'duePicker';
+  var lab = document.createElement('label'); lab.textContent = 'Pick the due (optional — search party or room)';
+  var search = document.createElement('input'); search.id = 'dueSearch'; search.type = 'text';
+  search.placeholder = 'Search open dues…';
+  var results = document.createElement('div'); results.id = 'dueResults';
+  var linked = document.createElement('div'); linked.id = 'dueLinked'; linked.className = 'hidden';
+  wrap.appendChild(lab); wrap.appendChild(search); wrap.appendChild(results); wrap.appendChild(linked);
+  box.insertBefore(wrap, box.firstChild);
+  search.oninput = function () { renderDueResults(search.value); };
+  var existingRef = $('f_dueRef').value;
+  if (existingRef) {
+    showLinkedBanner($('f_party').value, $('f_room') ? $('f_room').value : '');
+  } else {
+    renderDueResults('');
+  }
+}
+
+function renderDueResults(q) {
+  var results = $('dueResults'); if (!results) return;
+  var list = (DASH.dues && DASH.dues.openDues) || [];
+  q = (q || '').trim().toLowerCase();
+  var filtered = q ? list.filter(function (d) {
+    return (d.party || '').toLowerCase().indexOf(q) !== -1 || (d.room || '').toLowerCase().indexOf(q) !== -1;
+  }) : list;
+  filtered = filtered.slice(0, 20); // keep the tappable list short on a phone
+  if (!filtered.length) {
+    results.innerHTML = '<p class="muted" style="margin:4px 0">' + (list.length ? 'No matches.' : 'No open dues.') + '</p>';
+    return;
+  }
+  results.innerHTML = '';
+  filtered.forEach(function (d) {
+    var row = document.createElement('div'); row.className = 'party';
+    row.innerHTML = '<div class="top"><span class="nm">' + escapeHtml(d.party) +
+      (d.room ? (' · ' + escapeHtml(d.room)) : '') + '</span><span class="ob">Rs ' + fmt(d.outstanding) + '</span></div>' +
+      '<div class="muted" style="font-size:12px">' + dLabel(d) + '</div>';
+    row.onclick = function () { pickDue(d); };
+    results.appendChild(row);
+  });
+}
+
+function pickDue(d) {
+  $('f_dueRef').value = d.dueId;
+  $('f_party').value = d.party;
+  var roomSel = $('f_room');
+  if (roomSel) {
+    for (var i = 0; i < roomSel.options.length; i++) {
+      if (roomSel.options[i].value === d.room) { roomSel.value = d.room; break; }
+    }
+  }
+  if (!$('f_amount').value) $('f_amount').value = d.outstanding;
+  $('dueSearch').value = '';
+  showLinkedBanner(d.party, d.room, d.outstanding);
+}
+
+function showLinkedBanner(party, room, outstanding) {
+  var linked = $('dueLinked');
+  linked.classList.remove('hidden');
+  linked.innerHTML = 'Linked to ' + escapeHtml(party || '(unnamed)') + (room ? (' · ' + escapeHtml(room)) : '') +
+    (outstanding !== undefined ? (' · outstanding Rs ' + fmt(outstanding)) : '') +
+    ' — <a href="#" id="unlinkDue">change</a>';
+  $('unlinkDue').onclick = function (e) { e.preventDefault(); clearDueLink(); };
+  var results = $('dueResults'); if (results) results.innerHTML = '';
+}
+
+function clearDueLink() {
+  $('f_dueRef').value = '';
+  var linked = $('dueLinked');
+  linked.classList.add('hidden'); linked.innerHTML = '';
+  renderDueResults('');
 }
 
 function updateSaveLabel() {
@@ -258,10 +410,13 @@ $('saveBtn').onclick = function () {
       updateSaveLabel();
       if (!editing) ensureListMonth(savedYm); // jump the list to the month we saved into
       loadEntries();
+      loadDues(); // a due/recovery may have changed the tracker + datalist
+      if (!$('dashView').classList.contains('hidden')) loadDailyReport();
     })
     .withFailureHandler(function (err) {
       $('saveBtn').disabled = false;
       toast(err && err.message ? err.message : String(err), true);
+      if (STATE.section === 'recovery') loadDues(); // due may have moved (guard rejection) — refresh the picker
     });
   if (editing) runner.updateEntry(payload); else runner.submitEntry(payload);
 };
@@ -358,10 +513,139 @@ function doDelete(e) {
 
 $('lockBtn').onclick = function () {
   STATE = { hotel: null, pin: null, config: null, section: 'rent', editingId: null };
+  DASH = { scope: 'lifetime', dues: null, repLoaded: false };
+  showView('entry');
   $('app').classList.add('hidden');
   $('pinScreen').classList.remove('hidden');
   $('pin').value = '';
 };
+
+// ---- top nav: Entry / Dashboard ----
+function showView(which) {
+  var entry = which === 'entry';
+  $('entryView').classList.toggle('hidden', !entry);
+  $('dashView').classList.toggle('hidden', entry);
+  $('navEntry').classList.toggle('on', entry);
+  $('navDash').classList.toggle('on', !entry);
+  if (!entry) openDashboard();
+}
+$('navEntry').onclick = function () { showView('entry'); };
+$('navDash').onclick = function () { showView('dash'); };
+
+// ---- dashboard state ----
+var DASH = { scope: 'lifetime', dues: null, repLoaded: false };
+
+function errText(err) { return err && err.message ? err.message : String(err); }
+
+function openDashboard() {
+  if (!DASH.repLoaded) { buildRepMonths(); buildScopeChips(); DASH.repLoaded = true; }
+  loadDailyReport();
+  loadDues();
+}
+
+// ---- daily report ----
+function buildRepMonths() {
+  var sel = $('repMonth'); sel.innerHTML = '';
+  var now = new Date();
+  for (var i = 0; i < 12; i++) {
+    var d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    var mm = d.getMonth() + 1;
+    var opt = document.createElement('option');
+    opt.value = d.getFullYear() + '-' + (mm < 10 ? '0' : '') + mm;
+    opt.textContent = ymOptionLabel(d.getFullYear(), mm);
+    sel.appendChild(opt);
+  }
+  sel.value = todayIso().slice(0, 7);
+}
+$('repMonth').onchange = loadDailyReport;
+
+function loadDailyReport() {
+  var ym = $('repMonth').value; if (!ym) return;
+  $('repTable').innerHTML = '<p class="muted">Loading...</p>';
+  google.script.run
+    .withSuccessHandler(renderDailyReport)
+    .withFailureHandler(function (err) { $('repTable').innerHTML = '<p class="muted">' + errText(err) + '</p>'; })
+    .getDailyReport(STATE.hotel, STATE.pin, ym);
+}
+
+function renderDailyReport(rep) {
+  if (!rep || !rep.days || !rep.days.length) {
+    $('repTable').innerHTML = '<p class="muted">No entries for this month yet.</p>'; return;
+  }
+  var todayD = (todayIso().slice(0, 7) === rep.ym) ? Number(todayIso().slice(8)) : -1;
+  var h = '<div class="tablewrap"><table class="rep"><thead><tr>' +
+    '<th>Day</th><th>Rent</th><th>Food</th><th>Exp</th><th>Rec.Cash</th><th>Rec.Bank</th><th>Net</th></tr></thead><tbody>';
+  rep.days.forEach(function (d) {
+    h += '<tr class="' + (d.day === todayD ? 'today' : '') + '"><td>' + d.day + '</td><td>' +
+      fmt(d.rent) + '</td><td>' + fmt(d.food) + '</td><td>' + fmt(d.expense) + '</td><td>' +
+      fmt(d.recoveryCash) + '</td><td>' + fmt(d.recoveryBank) + '</td><td>' + fmt(d.net) + '</td></tr>';
+  });
+  var t = rep.totals;
+  h += '<tr class="tot"><td>Total</td><td>' + fmt(t.rent) + '</td><td>' + fmt(t.food) + '</td><td>' +
+    fmt(t.expense) + '</td><td>' + fmt(t.recoveryCash) + '</td><td>' + fmt(t.recoveryBank) + '</td><td>' + fmt(t.net) + '</td></tr></tbody></table></div>';
+  $('repTable').innerHTML = h;
+}
+
+// ---- due tracker ----
+function buildScopeChips() {
+  var box = $('scopeChips'); box.innerHTML = '';
+  [['month', 'This month'], ['year', 'This year'], ['lifetime', 'Lifetime']].forEach(function (pair) {
+    var b = document.createElement('div');
+    b.className = 'chip' + (pair[0] === DASH.scope ? ' on' : '');
+    b.textContent = pair[1];
+    b.onclick = function () { DASH.scope = pair[0]; buildScopeChips(); renderDues(); };
+    box.appendChild(b);
+  });
+}
+
+function loadDues() {
+  google.script.run
+    .withSuccessHandler(function (d) { DASH.dues = d; fillPartiesDatalist(d); renderDues(); })
+    .withFailureHandler(function (err) { $('partyList').innerHTML = '<p class="muted">' + errText(err) + '</p>'; })
+    .getDuesTracker(STATE.hotel, STATE.pin);
+}
+
+function fillPartiesDatalist(d) {
+  var dl = $('partiesDatalist'); dl.innerHTML = '';
+  (d.outstandingParties || []).forEach(function (nm) {
+    var o = document.createElement('option'); o.value = nm; dl.appendChild(o);
+  });
+}
+
+function dLabel(ln) {
+  var mm = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][(ln.month || 1) - 1];
+  return (ln.day || '?') + ' ' + mm + ' ' + String(ln.year).slice(-2);
+}
+
+function renderDues() {
+  var d = DASH.dues; if (!d) return;
+  var sc = d.scopes[DASH.scope] || { incurred: 0, recovered: 0, outstanding: 0 };
+  $('dueTiles').innerHTML =
+    '<div class="tiles">' +
+    '<div class="tile"><div class="k">Incurred</div><div class="v">' + fmt(sc.incurred) + '</div></div>' +
+    '<div class="tile"><div class="k">Recovered</div><div class="v">' + fmt(sc.recovered) + '</div></div>' +
+    '<div class="tile out"><div class="k">' + (DASH.scope === 'lifetime' ? 'Outstanding' : 'Net') +
+    '</div><div class="v">' + fmt(sc.outstanding) + '</div></div></div>';
+  var parties = d.parties || [];
+  var box = $('partyList');
+  if (!parties.length) { box.innerHTML = '<p class="muted">No dues recorded yet.</p>'; return; }
+  box.innerHTML = '<div class="muted" style="margin-top:6px">Balances owed (lifetime, per party) — tap to see lines</div>';
+  parties.forEach(function (p) {
+    var row = document.createElement('div'); row.className = 'party';
+    var cleared = p.outstanding <= 0;
+    var lines = p.lines.map(function (ln) {
+      return '<div class="ln ' + (ln.type === 'recovery' ? 'rec' : '') + '"><span>' +
+        dLabel(ln) + ' · ' + (ln.type === 'recovery' ? 'recovered' : 'due') +
+        (ln.room ? (' · ' + escapeHtml(ln.room)) : '') + '</span><span>' +
+        (ln.type === 'recovery' ? '−' : '+') + fmt(ln.amount) + '</span></div>';
+    }).join('');
+    row.innerHTML = '<div class="top"><span class="nm">' + escapeHtml(p.party) + '</span>' +
+      '<span class="ob' + (cleared ? ' clear' : '') + '">' + fmt(p.outstanding) + '</span></div>' +
+      '<div class="lines hidden">' + lines + '</div>';
+    row.onclick = function () { row.querySelector('.lines').classList.toggle('hidden'); };
+    box.appendChild(row);
+  });
+}
 
 function fmt(n) { n = Number(n) || 0; return n.toLocaleString('en-IN'); }
 function escapeHtml(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }

@@ -86,6 +86,25 @@ function categorize(particular) {
   return 'General & Misc';
 }
 
+// The fixed set of category labels the entry-app dropdown offers and Parser.gs
+// checks a Particulars cell against (isKnownCategory_) before falling back to
+// categorize()'s regex guess. Single source of truth for both.
+function knownCategories_() {
+  var cats = CATEGORY_RULES.map(function (r) { return r[1]; });
+  cats.push('General & Misc');
+  return cats.filter(function (c, i) { return cats.indexOf(c) === i; });
+}
+
+function isKnownCategory_(text) {
+  var t = String(text || '').trim();
+  if (!t) return false;
+  var cats = knownCategories_();
+  for (var i = 0; i < cats.length; i++) {
+    if (cats[i].toLowerCase() === t.toLowerCase()) return true;
+  }
+  return false;
+}
+
 // Model for the on-demand "Run AI Analysis" button (AI.gs). gpt-4.1 is a
 // strong non-reasoning model that keeps the exact same Chat Completions
 // request path as before — standard "temperature", "max_completion_tokens",

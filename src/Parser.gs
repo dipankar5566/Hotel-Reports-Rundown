@@ -56,6 +56,10 @@ function anchorType_(h) {
   if (h.indexOf('particuler') !== -1 || h.indexOf('particular') !== -1) return 'expense';
   if (h.indexOf('room (food') === 0) return 'food';
   if (h === 'room with source' || h.indexOf('room no') === 0) return 'rent';
+  // Due-recovery ledger section (staff PWA). Detected so the entry app's write
+  // side (resolveWriteCols_) and the dues reader (Report.gs) can locate it;
+  // parseTab_ deliberately skips it so it never touches any P&L total.
+  if (h.indexOf('recovery') === 0) return 'recovery';
   return null;
 }
 
@@ -169,6 +173,13 @@ function parseTab_(values, year, month) {
   det.sections.forEach(function (sec) {
     var heads = sec.heads;
     var t = sec.type;
+    // The recovery ledger is a PWA-only section — none of it is P&L (skip any
+    // non-{rent,food,expense} type so month totals stay identical, the
+    // parser-vs-pivot invariant holds). Its Cash/Banking split is money-
+    // control-relevant, but that money is already counted once via the
+    // linked booking row's own Cash/Bank cells (Entry.gs's adjustDueCell_
+    // mutates them at write time) — reading it again here would double-count.
+    if (t !== 'rent' && t !== 'food' && t !== 'expense') return;
     var amtCol = t === 'rent'
       ? colFor_(heads, ['total revenue', 'grand total', 'amount'])
       : colFor_(heads, ['amount', 'amount(rs)']);
@@ -176,10 +187,10 @@ function parseTab_(values, year, month) {
     var bankCol = colFor_(heads, ['banking', 'banking & upi']);
     var gstCol = colFor_(heads, ['gst']);
     var partCol = colFor_(heads, ['particulers', 'particulars']);
-    // Explicit expense category, written by the entry app. When present it is
-    // authoritative; otherwise we fall back to categorize(particular). Legacy
-    // staff tabs have no "Category" header, so catCol is null and their output
-    // is byte-identical (the parser-vs-pivot invariant is preserved).
+    // Legacy-only fallback: an explicit "Category" header some earlier app
+    // version could write. Real sheets never populate it (the entry app now
+    // writes the category into the Particulars cell itself, see below), but a
+    // stray old row with one still resolves correctly through this.
     var catCol = t === 'expense' ? colFor_(heads, ['category']) : null;
     var srcCol = colFor_(heads, ['source']);
     var roomCol = colFor_(heads, ['room with source', 'room no.', 'room (food & others)']);
@@ -190,7 +201,9 @@ function parseTab_(values, year, month) {
     var discCol = colFor_(heads, ['discount', 'dicount']);
     // Free-text remark on rent/food rows (staff sheets already carry it). Read
     // additively into remarkRows; never touches any total, so the pivot invariant holds.
-    var remarkCol = (t === 'rent' || t === 'food') ? colFor_(heads, ['remark', 'remarks']) : null;
+    // Expense also reads Remark, but as the expense LINE'S DESCRIPTION (see the
+    // expense row-build block below) rather than into remarkRows.
+    var remarkCol = (t === 'rent' || t === 'food' || t === 'expense') ? colFor_(heads, ['remark', 'remarks']) : null;
     if (amtCol === null) {
       out.flags.push(t + ': no amount column');
       return;
@@ -235,15 +248,24 @@ function parseTab_(values, year, month) {
       if (dueCol !== null) { var dv = num_(row[dueCol]); if (dv) s.due += dv; }
       if (discCol !== null) { var xv = num_(row[discCol]); if (xv) s.discount += xv; }
       if (t === 'expense' && partCol !== null) {
+        // The entry app writes the picked category directly into Particulars
+        // (isKnownCategory_ recognizes it verbatim); an old explicit Category
+        // column is a legacy fallback; a freeform legacy staff row falls
+        // through to categorize()'s regex guess, unchanged from before.
+        var partText = String(row[partCol] || '').replace(/\s+/g, ' ').trim();
         var explicitCat = catCol !== null
           ? String(row[catCol] == null ? '' : row[catCol]).replace(/\s+/g, ' ').trim()
           : '';
-        var cat = explicitCat || categorize(row[partCol]);
+        var cat = isKnownCategory_(partText) ? partText : (explicitCat || categorize(partText));
         s.cats[cat] = (s.cats[cat] || 0) + amt;
-        var particular = String(row[partCol] || '').replace(/\s+/g, ' ').trim();
-        if (particular) {
+        // Description shown alongside the category: the Remark cell when
+        // present, else the Particulars text itself (legacy rows, or a new
+        // row where staff left the optional Remark blank).
+        var desc = remarkCol !== null ? String(row[remarkCol] || '').replace(/\s+/g, ' ').trim() : '';
+        if (!desc) desc = partText;
+        if (desc) {
           if (!s.catRows[cat]) s.catRows[cat] = [];
-          s.catRows[cat].push({ day: d, particular: particular, amount: amt });
+          s.catRows[cat].push({ day: d, particular: desc, amount: amt });
         }
       }
       if (t === 'rent') {

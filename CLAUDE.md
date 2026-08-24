@@ -25,8 +25,9 @@ A Google Apps Script (GAS) web app that reads two staff-maintained Google Sheets
     │                    rent/food/expense/recovery for a month) + getDuesTracker
     │                    (per-party dues: incurred vs recovered, month/year/lifetime).
     │                    Pure cores over fetched values; reuses Parser helpers.
-    ├── Main.gs          doGet() -> Index.html (dashboard, DASHBOARD_TOKEN-gated)
-    │                    or Form.html (entry app, ?view=entry).
+    ├── Main.gs          doGet() -> Index.html (dashboard, gated by DASHBOARD_TOKEN
+    │                    + a DASHBOARD_ALLOWED_EMAILS identity allowlist) or
+    │                    Form.html (entry app, ?view=entry).
     ├── Validate.gs      validateAll() — parser-vs-pivot totals check inside GAS.
     ├── Index.html       Entire dashboard client: rendering, filters, charts, AI.
     └── Form.html        Daily-entry PWA client: Entry view (PIN, dropdowns,
@@ -73,12 +74,12 @@ clasp redeploy <DEPLOYMENT_ID>
 
 `clasp push` alone updates the editor project but not the live URL — you must `redeploy` the existing deployment id to publish. **There are two web-app deployments off the one project** (both execute-as-owner):
 
-- **Dashboard** — access = owner only, `DASHBOARD_TOKEN`-gated (URL needs `?k=<token>`).
-- **Entry app** — access = ANYONE (anonymous), opened at `?view=entry`, PIN-gated. Kept separate so making it public never exposes the P&L; because both share `doGet`, the dashboard branch verifies `DASHBOARD_TOKEN` (see `dashboardAllowed_` in `Main.gs`).
+- **Dashboard** — access = **Anyone with a Google account** (sign-in required, not anonymous), gated by two independent layers: `DASHBOARD_TOKEN` (URL needs `?k=<token>`) AND a `DASHBOARD_ALLOWED_EMAILS` per-account allowlist checked against the signed-in caller's identity (`Session.getActiveUser()`; see `dashboardAllowed_`/`emailAllowed_` in `Main.gs`). Widened from owner-only (`MYSELF`) specifically so a second, named Google account can be let in without widening it to anyone holding the link+token.
+- **Entry app** — access = ANYONE (anonymous), opened at `?view=entry`, PIN-gated. Kept separate so making it public never exposes the P&L.
 
-**⚠️ Access-clobber gotcha.** The manifest (`appsscript.json`) has a **single** `webapp.access` field (currently `MYSELF`), but the two deployments need **different** access (dashboard = owner-only, entry = anyone). A plain `clasp redeploy <entry-id>` re-applies the manifest's `MYSELF` and silently breaks the entry app — staff then get a Drive "Sorry, unable to open the file at this time" error (the signed-in Gmail can't open an owner-only script). So **manage the entry deployment's access in the editor UI**, not via clasp: Deploy → Manage deployments → entry deployment → pencil → Who has access = **Anyone** → Deploy (edits the existing deployment, keeps the same `/exec` URL). If you must use clasp, do the flip-dance: set manifest `access` = `ANYONE_ANONYMOUS`, `clasp push -f`, `clasp redeploy <entry-id>`; then set it back to `MYSELF`, `clasp push -f`, `clasp redeploy <dashboard-id>` (redeploying only the dashboard id leaves the entry deployment untouched). Redeploy each id you changed.
+**⚠️ Access-clobber gotcha.** The manifest (`appsscript.json`) has a **single** `webapp.access` field (committed as `MYSELF`, deliberately never updated to match either live deployment), but the two deployments need **different**, non-default access (dashboard = Anyone-with-Google-account, entry = Anyone-anonymous). A plain `clasp redeploy <id>` re-applies the manifest's `MYSELF` to whichever id you redeploy and silently locks it back to owner-only — for entry, staff get a Drive "Sorry, unable to open the file at this time" error; for dashboard, the second allowed person gets the same error, and Google blocks them **before `doGet`/`dashboardAllowed_` even runs** — no allowlist code fixes a platform-level block above your code. So **manage BOTH deployments' access only in the editor UI, never via `clasp redeploy`**: Deploy → Manage deployments → pencil on the target deployment → Who has access → Deploy (edits the existing deployment, keeps the same `/exec` URL). `clasp push` alone is always safe (code only, never touches access); it's `clasp redeploy <id>` that re-stamps access from the manifest — avoid it for both ids now that both diverge from `MYSELF`. (The old clasp-only flip-dance for the entry id is retired: it only ever kept the dashboard id safe because dashboard used to sit at the manifest's own value — no longer true.)
 
-**Secrets (Script Properties only, never in source):** `OPENAI_API_KEY`, `ENTRY_PIN_DREAM`, `ENTRY_PIN_PARADISE`, `DASHBOARD_TOKEN`.
+**Secrets & access config (Script Properties only, never in source):** `OPENAI_API_KEY`, `ENTRY_PIN_DREAM`, `ENTRY_PIN_PARADISE`, `DASHBOARD_TOKEN`, `DASHBOARD_ALLOWED_EMAILS` (comma-separated allowed Google account emails for the dashboard — inert/allow-all if unset, same idiom as `DASHBOARD_TOKEN`).
 
 ### Cache gotcha
 

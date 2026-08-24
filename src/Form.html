@@ -76,6 +76,8 @@
     </select>
     <label>PIN</label>
     <input id="pin" type="password" inputmode="numeric" autocomplete="off" placeholder="Enter hotel PIN">
+    <label>Your name</label>
+    <input id="staffName" type="text" autocomplete="off" placeholder="Who's entering today?">
     <div style="height:14px"></div>
     <button class="primary" id="unlockBtn">Unlock</button>
     <p class="muted" id="pinMsg" style="margin-top:12px"></p>
@@ -152,7 +154,7 @@
   document.head.appendChild(link);
 })();
 
-var STATE = { hotel: null, pin: null, config: null, section: 'rent', editingId: null };
+var STATE = { hotel: null, pin: null, config: null, staffName: null, section: 'rent', editingId: null, editOrigYm: null };
 
 // Field definitions per section. type: text|number|select. req = required.
 var FIELD_DEFS = {
@@ -215,11 +217,13 @@ function todayIso() {
 // ---- unlock ----
 $('unlockBtn').onclick = function () {
   var hotel = $('hotel').value, pin = $('pin').value;
+  var staffName = ($('staffName').value || '').trim();
+  if (!staffName) { $('pinMsg').textContent = 'Enter your name.'; return; }
   $('pinMsg').textContent = 'Checking...';
   $('unlockBtn').disabled = true;
   google.script.run
     .withSuccessHandler(function (cfg) {
-      STATE.hotel = hotel; STATE.pin = pin; STATE.config = cfg;
+      STATE.hotel = hotel; STATE.pin = pin; STATE.config = cfg; STATE.staffName = staffName;
       $('pinMsg').textContent = '';
       $('unlockBtn').disabled = false;
       $('pinScreen').classList.add('hidden');
@@ -260,7 +264,7 @@ function selectSection(sec) {
 function buildFields(prefill) {
   var box = $('fields'); box.innerHTML = '';
   FIELD_DEFS[STATE.section].forEach(function (def) {
-    var el;
+    var el, opts;
     if (def.type === 'hidden') {
       el = document.createElement('input'); el.type = 'hidden';
     } else {
@@ -269,11 +273,19 @@ function buildFields(prefill) {
       box.appendChild(lab);
       if (def.type === 'select') {
         el = document.createElement('select');
-        var opts = STATE.config[def.src] || [];
+        opts = STATE.config[def.src] || [];
         if (!def.req) { var blank = document.createElement('option'); blank.value = ''; blank.textContent = '-'; el.appendChild(blank); }
         opts.forEach(function (o) {
           var op = document.createElement('option'); op.value = o; op.textContent = o; el.appendChild(op);
         });
+        // Room list (Config.gs ROOMS_BY_HOTEL) is a fixed placeholder set —
+        // an "Other" escape hatch keeps a real, un-listed room from forcing
+        // staff to silently pick the wrong one. See f_room_other below.
+        if (def.src === 'rooms') {
+          var otherOpt = document.createElement('option');
+          otherOpt.value = '__other__'; otherOpt.textContent = 'Other (type below)';
+          el.appendChild(otherOpt);
+        }
       } else {
         el = document.createElement('input');
         el.type = def.type === 'number' ? 'number' : 'text';
@@ -282,10 +294,66 @@ function buildFields(prefill) {
       }
     }
     el.id = 'f_' + def.key;
-    if (prefill && prefill[def.key] !== undefined && prefill[def.key] !== null) el.value = prefill[def.key];
+    var pv = prefill && prefill[def.key] !== undefined && prefill[def.key] !== null ? prefill[def.key] : null;
+    var needsOther = false;
+    if (pv !== null) {
+      if (def.type === 'select' && def.src === 'rooms' && opts.indexOf(String(pv)) === -1 && pv !== '') {
+        needsOther = true; // stored room isn't in the current list — don't silently fall back to the 1st option
+      } else {
+        el.value = pv;
+      }
+    }
+    if (needsOther) el.value = '__other__';
     box.appendChild(el);
+    if (def.type === 'select' && def.src === 'rooms') {
+      var otherInput = document.createElement('input');
+      otherInput.type = 'text'; otherInput.id = 'f_' + def.key + '_other';
+      otherInput.placeholder = 'Type the room';
+      otherInput.className = needsOther || el.value === '__other__' ? '' : 'hidden';
+      if (needsOther) otherInput.value = String(pv);
+      box.appendChild(otherInput);
+      el.onchange = function () {
+        otherInput.classList.toggle('hidden', el.value !== '__other__');
+      };
+    }
   });
   if (STATE.section === 'recovery') buildDuePicker();
+  wireMoneyCheck();
+}
+
+// Live client-side hint mirroring the server's hard-block invariant
+// (Cash+Bank(+Due) must equal Amount — normalizeEntryPayload_ in Entry.gs).
+// Pure UX: the server check is what actually blocks a bad save.
+function wireMoneyCheck() {
+  var sec = STATE.section;
+  if (sec !== 'rent' && sec !== 'food' && sec !== 'recovery') return;
+  var hint = document.createElement('p');
+  hint.id = 'moneyHint';
+  hint.className = 'muted hidden';
+  hint.style.color = 'var(--danger)';
+  $('fields').appendChild(hint);
+  var ids = ['f_amount', 'f_cash', 'f_bank'].concat(sec === 'rent' ? ['f_due'] : []);
+  ids.forEach(function (id) {
+    var el = $(id);
+    if (el) el.oninput = updateMoneyHint;
+  });
+  updateMoneyHint();
+}
+
+function updateMoneyHint() {
+  var sec = STATE.section;
+  var hint = $('moneyHint'); if (!hint) return;
+  var amt = Number($('f_amount').value) || 0;
+  var cash = ($('f_cash') && Number($('f_cash').value)) || 0;
+  var bank = ($('f_bank') && Number($('f_bank').value)) || 0;
+  var due = (sec === 'rent' && $('f_due') && Number($('f_due').value)) || 0;
+  var sum = cash + bank + due;
+  if (!amt && !sum) { hint.classList.add('hidden'); return; }
+  var diff = sum - amt;
+  if (Math.abs(diff) <= 0.01) { hint.classList.add('hidden'); return; }
+  hint.classList.remove('hidden');
+  hint.textContent = (sec === 'rent' ? 'Cash+Bank+Due' : 'Cash+Bank') + ' = Rs ' + fmt(sum) +
+    ', Amount = Rs ' + fmt(amt) + ' (' + (diff < 0 ? 'short' : 'over') + ' by Rs ' + fmt(Math.abs(diff)) + ')';
 }
 
 // ---- recovery: pick-from-open-dues picker (hard link), not a native <select>
@@ -383,12 +451,20 @@ function collectPayload() {
   for (var i = 0; i < defs.length; i++) {
     var d = defs[i];
     var v = $('f_' + d.key).value;
+    if (d.type === 'select' && d.src === 'rooms' && v === '__other__') {
+      v = ($('f_' + d.key + '_other').value || '').trim();
+      if (!v) { toast('Type the room in "' + d.label + '".', true); return null; }
+    }
     if (d.req && (v === '' || v === null)) { toast(d.label + ' is required.', true); return null; }
     fields[d.key] = v;
   }
   if (!(Number(fields.amount) > 0)) { toast('Amount must be greater than 0.', true); return null; }
+  if (STATE.section === 'expense' && fields.category === 'General & Misc' && !String(fields.remark || '').trim()) {
+    toast('Add a Remark describing the expense — "General & Misc" needs a reason so it isn\'t untraceable later.', true);
+    return null;
+  }
   return {
-    hotel: STATE.hotel, pin: STATE.pin, section: STATE.section,
+    hotel: STATE.hotel, pin: STATE.pin, section: STATE.section, enteredBy: STATE.staffName,
     date: { year: Number(parts[0]), month: Number(parts[1]), day: Number(parts[2]) },
     fields: fields
   };
@@ -399,7 +475,7 @@ $('saveBtn').onclick = function () {
   if (!payload) return;
   $('saveBtn').disabled = true;
   var editing = STATE.editingId;
-  if (editing) payload.entryId = editing;
+  if (editing) { payload.entryId = editing; payload.origYm = STATE.editOrigYm; }
   var savedYm = payload.date.year + '-' + (payload.date.month < 10 ? '0' : '') + payload.date.month;
   var runner = google.script.run
     .withSuccessHandler(function () {
@@ -408,7 +484,9 @@ $('saveBtn').onclick = function () {
       STATE.editingId = null;
       buildFields();       // clear entered values for the next row
       updateSaveLabel();
-      if (!editing) ensureListMonth(savedYm); // jump the list to the month we saved into
+      // Jump the list to the saved-into month — for a new entry, or an edit
+      // whose date crossed a month boundary (the row moved tabs server-side).
+      if (!editing || savedYm !== STATE.editOrigYm) ensureListMonth(savedYm);
       loadEntries();
       loadDues(); // a due/recovery may have changed the tracker + datalist
       if (!$('dashView').classList.contains('hidden')) loadDailyReport();
@@ -478,7 +556,9 @@ function renderEntries(list) {
     var row = document.createElement('div'); row.className = 'entry';
     var day = document.createElement('span'); day.className = 'day'; day.textContent = e.day ? (e.day + '') : '?';
     var grow = document.createElement('div'); grow.className = 'grow';
-    grow.innerHTML = '<span class="sec">' + e.section + '</span><br>' + escapeHtml(e.label || '');
+    var enteredBy = (e.fields && e.fields.enteredBy) || '';
+    grow.innerHTML = '<span class="sec">' + e.section + '</span><br>' + escapeHtml(e.label || '') +
+      (enteredBy ? ' <span class="muted">· ' + escapeHtml(enteredBy) + '</span>' : '');
     var amt = document.createElement('span'); amt.className = 'amt'; amt.textContent = 'Rs ' + fmt(e.amount);
     var ed = document.createElement('button'); ed.className = 'mini ed'; ed.textContent = 'Edit';
     ed.onclick = function () { startEdit(e); };
@@ -492,6 +572,7 @@ function renderEntries(list) {
 function startEdit(e) {
   STATE.section = e.section;
   STATE.editingId = e.entryId;
+  STATE.editOrigYm = listYm(); // the tab this row currently lives in — updateEntry needs it to find the row even if the date field is then edited across a month boundary
   buildSectionChips();
   buildFields(e.fields || {});
   updateSaveLabel();
@@ -512,12 +593,13 @@ function doDelete(e) {
 }
 
 $('lockBtn').onclick = function () {
-  STATE = { hotel: null, pin: null, config: null, section: 'rent', editingId: null };
+  STATE = { hotel: null, pin: null, config: null, staffName: null, section: 'rent', editingId: null, editOrigYm: null };
   DASH = { scope: 'lifetime', dues: null, repLoaded: false };
   showView('entry');
   $('app').classList.add('hidden');
   $('pinScreen').classList.remove('hidden');
   $('pin').value = '';
+  $('staffName').value = ''; // a shared device shouldn't default to whoever unlocked it last
 };
 
 // ---- top nav: Entry / Dashboard ----
@@ -636,7 +718,9 @@ function renderDues() {
     var lines = p.lines.map(function (ln) {
       return '<div class="ln ' + (ln.type === 'recovery' ? 'rec' : '') + '"><span>' +
         dLabel(ln) + ' · ' + (ln.type === 'recovery' ? 'recovered' : 'due') +
-        (ln.room ? (' · ' + escapeHtml(ln.room)) : '') + '</span><span>' +
+        (ln.room ? (' · ' + escapeHtml(ln.room)) : '') +
+        (ln.orphaned ? ' · <span style="color:var(--danger)">⚠ unlinked</span>' : '') +
+        '</span><span>' +
         (ln.type === 'recovery' ? '−' : '+') + fmt(ln.amount) + '</span></div>';
     }).join('');
     row.innerHTML = '<div class="top"><span class="nm">' + escapeHtml(p.party) + '</span>' +

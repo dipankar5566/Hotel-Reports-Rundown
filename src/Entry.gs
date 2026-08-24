@@ -32,10 +32,10 @@ var MONTH_NAMES_ = ['JANUARY', 'FEBRUARY', 'MARCH', 'APRIL', 'MAY', 'JUNE',
 function canonicalLayout_(section) {
   if (section === 'rent') {
     return ['Date', 'Room with source', 'Source', 'Nights', 'Total revenue',
-            'Cash', 'Banking & UPI', 'GST', 'Due', 'Discount', 'Remark', 'Party', '_entryId'];
+            'Cash', 'Banking & UPI', 'GST', 'Due', 'Discount', 'Remark', 'Party', 'Entered by', '_entryId'];
   }
   if (section === 'food') {
-    return ['Date', 'Room (food & others)', 'Amount', 'Cash', 'Banking & UPI', 'Remark', '_entryId'];
+    return ['Date', 'Room (food & others)', 'Amount', 'Cash', 'Banking & UPI', 'Remark', 'Entered by', '_entryId'];
   }
   if (section === 'recovery') {
     // Due-recovery ledger. Anchor header 'Recovery party' is what anchorType_
@@ -45,17 +45,32 @@ function canonicalLayout_(section) {
     // recovery to the exact rent row it pays down (that row's own _entryId,
     // reused as a foreign key — see buildDueIndex_ in Report.gs); blank when
     // the staff picked "Other / not listed" and typed a party name instead.
-    return ['Date', 'Recovery party', 'Room', 'Amount', 'Cash', 'Banking & UPI', 'Remark', 'Due ref', '_entryId'];
+    return ['Date', 'Recovery party', 'Room', 'Amount', 'Cash', 'Banking & UPI', 'Remark', 'Due ref', 'Entered by', '_entryId'];
   }
-  return ['Date', 'Particulers', 'Amount', 'Remark', '_entryId']; // expense
+  return ['Date', 'Particulers', 'Amount', 'Remark', 'Entered by', '_entryId']; // expense
 }
 
 // Fixed left-edge column of each section on an app-created tab, plus grid
-// width. Sections sit side by side with blank gap columns between them so
-// detectSections_ bounds each correctly (the next anchor truncates a
-// section's window well before the 3-blank guard would even trigger).
-var SECTION_START_ = { rent: 0, food: 14, expense: 22, recovery: 28 };
-var CANONICAL_WIDTH_ = 36; // recovery widened by 2 (Cash, Banking & UPI); nothing sits right of it
+// width — DERIVED from each section's canonicalLayout_() length, never hand-
+// maintained. Parser.gs's detectSections_ bounds a section's header scan at
+// `nextAnchorCol - 3` (see its file header), which only lines up correctly
+// when each section occupies EXACTLY its own header count with a single
+// blank gap column before the next section starts (nextStart = start+width+1).
+// Deriving this avoids silently desyncing that invariant the next time a
+// column is added to canonicalLayout_ (a fixed offset requires re-deriving
+// this arithmetic by hand — error-prone and exactly how a header can end up
+// unreadable on a freshly created tab).
+function computeSectionLayout_() {
+  var starts = {}, col = 0;
+  ENTRY_SECTIONS_.forEach(function (sec) {
+    starts[sec] = col;
+    col += canonicalLayout_(sec).length + 1; // +1 blank gap before the next section
+  });
+  return { starts: starts, width: col - 1 }; // no trailing gap after the last section
+}
+var SECTION_LAYOUT_ = computeSectionLayout_();
+var SECTION_START_ = SECTION_LAYOUT_.starts;
+var CANONICAL_WIDTH_ = SECTION_LAYOUT_.width;
 
 /** Full header row (length CANONICAL_WIDTH_) for a brand-new tab. */
 function canonicalHeaderRow_() {
@@ -79,6 +94,7 @@ function entryFieldHeaders_(section) {
       : ['amount', 'amount(rs)'],
     cash: ['cash', 'cash/bank'],
     bank: ['banking', 'banking & upi'],
+    enteredBy: ['entered by', 'enteredby'],
     entryId: ['_entryid']
   };
   if (section === 'rent') {
@@ -119,10 +135,10 @@ function essentialFields_(section) {
 
 /** Ordered field list per section for building/writing a row. */
 function entryWriteFields_(section) {
-  if (section === 'rent') return ['room', 'source', 'nights', 'amount', 'cash', 'bank', 'gst', 'due', 'discount', 'remark', 'party'];
-  if (section === 'food') return ['room', 'amount', 'cash', 'bank', 'remark'];
-  if (section === 'recovery') return ['party', 'room', 'amount', 'cash', 'bank', 'remark', 'dueRef'];
-  return ['category', 'amount', 'remark']; // expense
+  if (section === 'rent') return ['room', 'source', 'nights', 'amount', 'cash', 'bank', 'gst', 'due', 'discount', 'remark', 'party', 'enteredBy'];
+  if (section === 'food') return ['room', 'amount', 'cash', 'bank', 'remark', 'enteredBy'];
+  if (section === 'recovery') return ['party', 'room', 'amount', 'cash', 'bank', 'remark', 'dueRef', 'enteredBy'];
+  return ['category', 'amount', 'remark', 'enteredBy']; // expense
 }
 
 /**
@@ -311,6 +327,22 @@ function ensureRemarkColumn_(sheet, values, res, section) {
   return resolveWriteCols_(fresh, section);
 }
 
+/** Ensure an 'Entered by' column exists so a submitted/edited row can be
+ * attributed to the staff member who made it — no per-staff PIN, just a
+ * plain name field (STATE.staffName in Form.html). Same retrofit pattern as
+ * ensureRemarkColumn_: fires on any tab (app-created or legacy) that
+ * predates this attribution feature. Inserted immediately LEFT of
+ * _entryId. */
+function ensureEnteredByColumn_(sheet, values, res, section) {
+  if (res.cols.enteredBy !== null && res.cols.enteredBy !== undefined) return res;
+  var idCol = res.cols.entryId;
+  if (idCol === null || idCol === undefined) return res; // no anchor -> skip (attribution dropped gracefully)
+  sheet.insertColumnBefore(idCol + 1);                   // 1-based; pushes _entryId right by one
+  sheet.getRange(res.headerRow + 1, idCol + 1).setValue('Entered by');
+  var fresh = sheet.getDataRange().getValues();
+  return resolveWriteCols_(fresh, section);
+}
+
 /** Rent only: ensure a 'Party' column exists so a due can be attributed to a
  * debtor. Canonical app tabs have it; this fires on rent tabs created before
  * Party existed. Inserted immediately LEFT of _entryId (stays inside the rent
@@ -476,21 +508,60 @@ function adjustDueCell_(ss, dueId, deltaDue, deltaCash, deltaBank) {
   return true;
 }
 
+/** Write [{col,value,isDate}] pairs to one row in as few calls as possible.
+ * On a canonical (app-created or app-retrofitted) tab, a section's resolved
+ * columns are always perfectly contiguous (canonicalLayout_/ensure*Column_
+ * always insert immediately adjacent), so one batched setValues() call covers
+ * the whole write — shrinking the interruption window (GAS quota/6-min cap
+ * mid-write leaving a half-written, un-owned row) from N calls to 1. A legacy
+ * staff tab whose columns happen to have a gap falls back to per-cell
+ * setValue, in ascending column order (never touches a column outside
+ * `pairs`) — entryId is always the section's rightmost resolved column
+ * (ensureEntryIdColumn_ inserts it there), so ascending order also means it's
+ * written/cleared last in the fallback path, same safety property either way. */
+function writeRowCells_(sheet, rowNum, pairs) {
+  if (!pairs.length) return;
+  var sorted = pairs.slice().sort(function (a, b) { return a.col - b.col; });
+  var minCol = sorted[0].col, maxCol = sorted[sorted.length - 1].col;
+  var contiguous = (maxCol - minCol + 1) === sorted.length;
+  if (contiguous) {
+    for (var i = 1; i < sorted.length; i++) {
+      if (sorted[i].col !== minCol + i) { contiguous = false; break; }
+    }
+  }
+  if (contiguous) {
+    var row = sorted.map(function (p) { return p.value; });
+    sheet.getRange(rowNum, minCol + 1, 1, row.length).setValues([row]);
+  } else {
+    sorted.forEach(function (p) {
+      sheet.getRange(rowNum, p.col + 1).setValue(p.value);
+    });
+  }
+  sorted.forEach(function (p) {
+    if (p.isDate) sheet.getRange(rowNum, p.col + 1).setNumberFormat('d-mmm');
+  });
+}
+
 /** Write one entry's cells into rowNum (1-based). Blank optionals are cleared
  * to '' so an edit that removes a value takes effect. Date gets a date-only
- * number format. */
-function writeEntryCells_(sheet, rowNum, section, form, res) {
+ * number format. `entryId`, if passed, is written in the SAME batch as the
+ * rest of the row (see writeRowCells_) so a new row never has a window where
+ * its data is visible but its id isn't. */
+function writeEntryCells_(sheet, rowNum, section, form, res, entryId) {
+  var pairs = [];
   if (res.dateCol !== null && res.dateCol !== undefined) {
-    var dcell = sheet.getRange(rowNum, res.dateCol + 1);
-    dcell.setValue(new Date(form.year, form.month - 1, form.day));
-    dcell.setNumberFormat('d-mmm');
+    pairs.push({ col: res.dateCol, value: new Date(form.year, form.month - 1, form.day), isDate: true });
   }
   entryWriteFields_(section).forEach(function (f) {
     var col = res.cols[f];
     if (col === null || col === undefined) return;
     var v = form[f];
-    sheet.getRange(rowNum, col + 1).setValue(v === null || v === undefined || v === '' ? '' : v);
+    pairs.push({ col: col, value: v === null || v === undefined || v === '' ? '' : v });
   });
+  if (entryId !== undefined && res.cols.entryId !== null && res.cols.entryId !== undefined) {
+    pairs.push({ col: res.cols.entryId, value: entryId });
+  }
+  writeRowCells_(sheet, rowNum, pairs);
 }
 
 /** Validate + normalize the incoming payload into a form object. */
@@ -507,12 +578,45 @@ function normalizeEntryPayload_(payload) {
   var src = payload.fields || {};
   for (var k in src) form[k] = src[k];
   form.year = year; form.month = month; form.day = day;
+  // Staff attribution — sent once per session (STATE.staffName in Form.html),
+  // not per-field, so it lives at the payload's top level rather than inside
+  // `fields`.
+  form.enteredBy = String(payload.enteredBy || '').trim();
   var amt = Number(form.amount);
   if (!(amt > 0)) throw new Error('Amount must be a positive number.'); // 0 rows are skipped by the parser
   form.amount = amt;
   ['nights', 'cash', 'bank', 'gst', 'due', 'discount'].forEach(function (f) {
-    if (form[f] !== null && form[f] !== undefined && form[f] !== '') form[f] = Number(form[f]);
+    if (form[f] !== null && form[f] !== undefined && form[f] !== '') {
+      var n = Number(form[f]);
+      if (isNaN(n)) throw new Error('"' + f + '" must be a number.');
+      form[f] = n;
+    }
   });
+  // Cash+Bank(+Due) must reconcile to Amount — the row's own money-in figure
+  // has to be internally consistent (see adjustDueCell_'s doc: "Cash + Bank +
+  // Due stays equal to a booking's Amount on that one row"). Rent has a Due
+  // column (partial/unpaid balance); food/recovery don't, so their full
+  // Amount must be Cash+Bank. Expense has no split fields — nothing to check.
+  var cash = form.cash || 0, bank = form.bank || 0, due = form.due || 0;
+  if (section === 'rent') {
+    var rentSum = cash + bank + due;
+    if (Math.abs(rentSum - amt) > 0.01) {
+      throw new Error('Cash+Bank+Due = ₹' + rentSum + ' but Amount = ₹' + amt +
+        (rentSum < amt ? ' — short by ₹' + (amt - rentSum) + '.' : ' — over by ₹' + (rentSum - amt) + '.'));
+    }
+  } else if (section === 'food' || section === 'recovery') {
+    var sum2 = cash + bank;
+    if (Math.abs(sum2 - amt) > 0.01) {
+      throw new Error('Cash+Bank = ₹' + sum2 + ' but Amount = ₹' + amt +
+        (sum2 < amt ? ' — short by ₹' + (amt - sum2) + '.' : ' — over by ₹' + (sum2 - amt) + '.'));
+    }
+  }
+  // The 'General & Misc' category is the parser's terminal catch-all
+  // (Config.gs categorize()) — require a Remark so an unmatched real cost
+  // stays traceable instead of silently vanishing into the generic bucket.
+  if (section === 'expense' && form.category === 'General & Misc' && !String(form.remark || '').trim()) {
+    throw new Error('"General & Misc" needs a Remark describing the expense.');
+  }
   return { section: section, form: form, year: year, month: month };
 }
 
@@ -552,6 +656,10 @@ function submitEntry(payload) {
       res = ensurePartyColumn_(sheet, values, res, norm.section); // rent debtor attribution
       values = sheet.getDataRange().getValues();
     }
+    if (norm.form.enteredBy) {
+      res = ensureEnteredByColumn_(sheet, values, res, norm.section);
+      values = sheet.getDataRange().getValues();
+    }
     if (norm.section === 'recovery' && norm.form.cash) {
       res = ensureRecoveryCashColumn_(sheet, values, res, norm.section);
       values = sheet.getDataRange().getValues();
@@ -581,8 +689,7 @@ function submitEntry(payload) {
     var rowIdx = findAppendRow_(values, res.headerRow, res.occupancyCols || res.cols.amount);
     var rowNum = rowIdx + 1;
     var entryId = Utilities.getUuid();
-    writeEntryCells_(sheet, rowNum, norm.section, norm.form, res);
-    sheet.getRange(rowNum, res.cols.entryId + 1).setValue(entryId);
+    writeEntryCells_(sheet, rowNum, norm.section, norm.form, res, entryId);
     if (norm.section === 'recovery' && norm.form.dueRef) {
       // Keep the linked booking row LIVE and self-consistent: Due visibly
       // drops by what was recovered, and that same row's own Cash/Bank rise
@@ -692,34 +799,46 @@ function updateEntry(payload) {
   var entryId = (payload || {}).entryId;
   if (!entryId) throw new Error('No entryId to update.');
   var norm = normalizeEntryPayload_(payload);
+  // The row may still live in the month it was ORIGINALLY entered under, not
+  // the (possibly just-edited) date's month — findEntryById_ only searches
+  // one tab, so it must be pointed at the entry's current tab, not the new
+  // date's tab. Form.html sends this as the list-month the entry was opened
+  // from; older callers that omit it fall back to norm's own month (same as
+  // the pre-fix behavior — same-month edits only).
+  var orig = (payload || {}).origYm ? ymParts_(payload.origYm) : { year: norm.year, month: norm.month };
   var lock = LockService.getScriptLock();
   lock.waitLock(20000);
   try {
     var ss = SpreadsheetApp.openById(hotelCfg_(hotel).id);
-    var hit = findEntryById_(ss, norm.year, norm.month, entryId);
+    var hit = findEntryById_(ss, orig.year, orig.month, entryId);
     if (!hit) throw new Error('Entry not found (it may have been changed in the sheet).');
     if (hit.section !== norm.section) throw new Error('Cannot move an entry between sections.');
-    if (norm.form.remark && (hit.section === 'rent' || hit.section === 'food' || hit.section === 'expense')) {
-      hit.res = ensureRemarkColumn_(hit.sheet, hit.sheet.getDataRange().getValues(), hit.res, hit.section);
+
+    // A rent row's Amount can't be edited once money's been recovered against
+    // it — the recovered figure was collected against the OLD amount, so
+    // changing it now would desync the whole due ledger (buildDueIndex_
+    // derives the original incurred amount as outstanding+recovered).
+    if (hit.section === 'rent') {
+      var recAgainst = recoveredAgainstDue_(collectAllTabs_(ss), entryId);
+      if (recAgainst.recovered > 0) {
+        var amtColChk = hit.res.cols.amount;
+        var oldRentAmount = (amtColChk !== null && amtColChk !== undefined)
+          ? (num_(hit.sheet.getRange(hit.rowNum, amtColChk + 1).getValue()) || 0) : 0;
+        if (Math.abs(Number(norm.form.amount) - oldRentAmount) > 0.01) {
+          throw new Error('₹' + recAgainst.recovered + ' already recovered against this booking — ' +
+            'Amount can\'t be changed. Correct via the recovery entries instead.');
+        }
+      }
     }
-    if (norm.form.party && hit.section === 'rent') {
-      hit.res = ensurePartyColumn_(hit.sheet, hit.sheet.getDataRange().getValues(), hit.res, hit.section);
-    }
-    if (norm.form.cash && hit.section === 'recovery') {
-      hit.res = ensureRecoveryCashColumn_(hit.sheet, hit.sheet.getDataRange().getValues(), hit.res, hit.section);
-    }
-    if (norm.form.bank && hit.section === 'recovery') {
-      hit.res = ensureRecoveryBankColumn_(hit.sheet, hit.sheet.getDataRange().getValues(), hit.res, hit.section);
-    }
-    if (norm.form.dueRef && hit.section === 'recovery') {
-      hit.res = ensureDueRefColumn_(hit.sheet, hit.sheet.getDataRange().getValues(), hit.res, hit.section);
-    }
+
     // Editing a recovery's amount/link/cash/bank must rebalance the linked
     // booking row's live Due/Cash/Bank cells. Read the OLD link/amount/cash/
-    // bank BEFORE writeEntryCells_ overwrites them; validate against what the
-    // target due's outstanding WOULD be once the old contribution is restored
-    // (covers same-due corrections and moving a recovery to a different due);
-    // apply both adjustments only after validation passes, so a rejected edit
+    // bank from the row's CURRENT (pre-write, pre-move) columns — reading
+    // never needs the ensure*Column_ retrofits below, only writing does.
+    // Validate against what the target due's outstanding WOULD be once the
+    // old contribution is restored (covers same-due corrections and moving a
+    // recovery to a different due); apply both adjustments only after
+    // validation passes and the row write below succeeds, so a rejected edit
     // never partially mutates.
     var oldDueRef = '', oldAmount = 0, oldCash = 0, oldBank = 0;
     if (hit.section === 'recovery') {
@@ -745,7 +864,90 @@ function updateEntry(payload) {
         }
       }
     }
-    writeEntryCells_(hit.sheet, hit.rowNum, hit.section, norm.form, hit.res);
+
+    var moving = orig.year !== norm.year || orig.month !== norm.month;
+    if (moving) {
+      // The date edit crossed a month boundary — the row has to relocate to
+      // the target month's tab. Keep the SAME entryId (never regenerate):
+      // findRentDueRowById_ already scans every month tab, so a rent row (or
+      // a recovery's dueRef pointing at one) keeps working across the move
+      // with zero extra bookkeeping. This is a relocation, not a deletion —
+      // no canDeleteDue_ guard, no due-restore; the due amount/link isn't
+      // going anywhere, only which physical row it lives on.
+      var targetSheet = findOrCreateMonthSheet_(ss, norm.year, norm.month);
+      var values2 = targetSheet.getDataRange().getValues();
+      var res2 = resolveWriteCols_(values2, hit.section);
+      if (!res2.ok && hit.section === 'recovery') {
+        res2 = ensureRecoverySection_(targetSheet, values2, res2, hit.section);
+        values2 = targetSheet.getDataRange().getValues();
+      }
+      if (!res2.ok) {
+        throw new Error('Cannot move this entry to "' + targetSheet.getName() +
+          '" (missing: ' + res2.missing.join(', ') + '). Fix that column header, or let the app create the month.');
+      }
+      res2 = ensureEntryIdColumn_(targetSheet, values2, res2, hit.section);
+      values2 = targetSheet.getDataRange().getValues();
+      if (norm.form.remark) {
+        res2 = ensureRemarkColumn_(targetSheet, values2, res2, hit.section);
+        values2 = targetSheet.getDataRange().getValues();
+      }
+      if (norm.form.party && hit.section === 'rent') {
+        res2 = ensurePartyColumn_(targetSheet, values2, res2, hit.section);
+        values2 = targetSheet.getDataRange().getValues();
+      }
+      if (norm.form.enteredBy) {
+        res2 = ensureEnteredByColumn_(targetSheet, values2, res2, hit.section);
+        values2 = targetSheet.getDataRange().getValues();
+      }
+      if (hit.section === 'recovery' && norm.form.cash) {
+        res2 = ensureRecoveryCashColumn_(targetSheet, values2, res2, hit.section);
+        values2 = targetSheet.getDataRange().getValues();
+      }
+      if (hit.section === 'recovery' && norm.form.bank) {
+        res2 = ensureRecoveryBankColumn_(targetSheet, values2, res2, hit.section);
+        values2 = targetSheet.getDataRange().getValues();
+      }
+      if (norm.form.dueRef && hit.section === 'recovery') {
+        res2 = ensureDueRefColumn_(targetSheet, values2, res2, hit.section);
+        values2 = targetSheet.getDataRange().getValues();
+      }
+      var rowIdx2 = findAppendRow_(values2, res2.headerRow, res2.occupancyCols || res2.cols.amount);
+      var rowNum2 = rowIdx2 + 1;
+      writeEntryCells_(targetSheet, rowNum2, hit.section, norm.form, res2, entryId);
+      // Clear the old row (same-id relocation, not a delete) using the ORIGINAL
+      // location's already-resolved columns — no ensure-calls needed to blank
+      // cells that already exist.
+      var oldClearCols = [hit.res.dateCol, hit.res.cols.entryId];
+      entryWriteFields_(hit.section).forEach(function (f) {
+        if (hit.res.cols[f] !== null && hit.res.cols[f] !== undefined) oldClearCols.push(hit.res.cols[f]);
+      });
+      writeRowCells_(hit.sheet, hit.rowNum, oldClearCols
+        .filter(function (c) { return c !== null && c !== undefined; })
+        .map(function (c) { return { col: c, value: '' }; }));
+      hit.sheet = targetSheet;
+      hit.rowNum = rowNum2;
+    } else {
+      if (norm.form.remark && (hit.section === 'rent' || hit.section === 'food' || hit.section === 'expense')) {
+        hit.res = ensureRemarkColumn_(hit.sheet, hit.sheet.getDataRange().getValues(), hit.res, hit.section);
+      }
+      if (norm.form.party && hit.section === 'rent') {
+        hit.res = ensurePartyColumn_(hit.sheet, hit.sheet.getDataRange().getValues(), hit.res, hit.section);
+      }
+      if (norm.form.enteredBy) {
+        hit.res = ensureEnteredByColumn_(hit.sheet, hit.sheet.getDataRange().getValues(), hit.res, hit.section);
+      }
+      if (norm.form.cash && hit.section === 'recovery') {
+        hit.res = ensureRecoveryCashColumn_(hit.sheet, hit.sheet.getDataRange().getValues(), hit.res, hit.section);
+      }
+      if (norm.form.bank && hit.section === 'recovery') {
+        hit.res = ensureRecoveryBankColumn_(hit.sheet, hit.sheet.getDataRange().getValues(), hit.res, hit.section);
+      }
+      if (norm.form.dueRef && hit.section === 'recovery') {
+        hit.res = ensureDueRefColumn_(hit.sheet, hit.sheet.getDataRange().getValues(), hit.res, hit.section);
+      }
+      writeEntryCells_(hit.sheet, hit.rowNum, hit.section, norm.form, hit.res);
+    }
+
     if (hit.section === 'recovery') {
       if (oldDueRef) adjustDueCell_(ss, oldDueRef, oldAmount, -oldCash, -oldBank); // restore old contribution
       if (norm.form.dueRef) {
@@ -802,9 +1004,13 @@ function deleteEntry(hotel, pin, ym, entryId) {
     entryWriteFields_(hit.section).forEach(function (f) {
       if (res.cols[f] !== null && res.cols[f] !== undefined) clearCols.push(res.cols[f]);
     });
-    clearCols.forEach(function (c) {
-      if (c !== null && c !== undefined) hit.sheet.getRange(hit.rowNum, c + 1).setValue('');
-    });
+    // Batched clear (writeRowCells_ sorts ascending -> entryId, always the
+    // rightmost resolved column, clears last even on a legacy tab's
+    // non-contiguous fallback path — a row stays app-owned/discoverable
+    // until every other cell is already blank).
+    writeRowCells_(hit.sheet, hit.rowNum, clearCols
+      .filter(function (c) { return c !== null && c !== undefined; })
+      .map(function (c) { return { col: c, value: '' }; }));
     // Restore what this recovery had paid down: give the due back, take back
     // the cash/bank it had added to the booking row.
     if (delDueRef) adjustDueCell_(ss, delDueRef, delAmount, -delCash, -delBank);

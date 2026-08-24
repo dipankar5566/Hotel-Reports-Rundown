@@ -112,19 +112,19 @@ function partyOf_(raw) {
 }
 
 /**
- * Index of due records by dueId (the linked rent row's own _entryId — every
- * app-submitted row gets one on write, rent included, regardless of Due; see
- * Entry.gs submitEntry). `outstanding` is read DIRECTLY from the rent row's
- * live Due cell (Entry.gs keeps it in sync on every linked recovery write);
- * `recovered` is independently summed from every recovery row whose 'Due ref'
- * resolves here; `amount` (the original incurred figure) is DERIVED as
- * outstanding+recovered — correct as long as Due is only ever adjusted
- * through the linked-recovery write-back (see the file header). No stored
- * "original due" column is needed. Rows with no resolvable _entryId (pre-app
- * manual rows) are NOT linkable and are left for buildDuesLedger_'s legacy
- * party-name fallback.
+ * Index of due records by dueId (the linked booking row's own _entryId —
+ * every app-submitted rent OR food row gets one on write, regardless of Due;
+ * see Entry.gs submitEntry). `outstanding` is read DIRECTLY from the booking
+ * row's live Due cell (Entry.gs keeps it in sync on every linked recovery
+ * write); `recovered` is independently summed from every recovery row whose
+ * 'Due ref' resolves here; `amount` (the original incurred figure) is
+ * DERIVED as outstanding+recovered — correct as long as Due is only ever
+ * adjusted through the linked-recovery write-back (see the file header). No
+ * stored "original due" column is needed. Rows with no resolvable _entryId
+ * (pre-app manual rows) are NOT linkable and are left for buildDuesLedger_'s
+ * legacy party-name fallback.
  *
- * Every rent row with a non-blank _entryId is indexed regardless of its
+ * Every rent/food row with a non-blank _entryId is indexed regardless of its
  * current Due value — a fully-recovered due legitimately shows Due=0 (still
  * outstanding-searchable-by-id, just not openDues-listable) and must stay
  * findable so a recovery referencing it is never mistaken for orphaned.
@@ -136,10 +136,11 @@ function partyOf_(raw) {
  * the exact same live numbers and can never disagree.
  *
  * Returns { byId: {dueId: dueRecord}, list: [dueRecord,...] } (list sorted
- * newest-first) where dueRecord = { dueId, party, room, year, month, day, ym,
- * amount, recovered, recoveryCount, outstanding }. `outstanding` is NEVER
- * clamped — an over-recovered due (should be prevented by the guards, but
- * shown honestly if it ever happens) reads negative rather than silently 0.
+ * newest-first) where dueRecord = { dueId, section ('rent'|'food'), party,
+ * room, year, month, day, ym, amount, recovered, recoveryCount, outstanding }.
+ * `outstanding` is NEVER clamped — an over-recovered due (should be
+ * prevented by the guards, but shown honestly if it ever happens) reads
+ * negative rather than silently 0.
  */
 function buildDueIndex_(tabs) {
   var byId = {};
@@ -147,33 +148,40 @@ function buildDueIndex_(tabs) {
     var values = tab.values, month = tab.month, year = tab.year;
     var det = detectSections_(values);
     if (!det) return;
-    var sec = null;
-    for (var i = 0; i < det.sections.length; i++) {
-      if (det.sections[i].type === 'rent') { sec = det.sections[i]; break; }
-    }
-    if (!sec) return;
-    var heads = sec.heads;
-    var dueCol = colFor_(heads, ['due']);
-    var idCol = colFor_(heads, ['_entryid']);
-    if (dueCol === null || idCol === null) return; // nothing linkable on this tab
-    var partyCol = colFor_(heads, ['party', 'debtor', 'guest']);
-    var roomCol = colFor_(heads, ['room with source', 'room no.', 'room no', 'room']);
-    var lastDay = null;
-    for (var r = det.headerRow + 1; r < values.length; r++) {
-      var idRaw = values[r][idCol];
-      var dueId = (idRaw === null || idRaw === undefined) ? '' : String(idRaw).trim();
-      if (!dueId) continue; // legacy row, no id -> handled by the fallback path
-      var dueVal = num_(values[r][dueCol]) || 0; // current live outstanding (may be 0)
-      var d = dayOf_(values[r][sec.dateCol], month);
-      if (d === null) d = lastDay; else lastDay = d;
-      byId[dueId] = {
-        dueId: dueId,
-        party: partyCol !== null ? String(values[r][partyCol] || '').replace(/\s+/g, ' ').trim() : '',
-        room: roomCol !== null ? String(values[r][roomCol] || '').replace(/\s+/g, ' ').trim() : '',
-        year: year, month: month, day: d, ym: year + '-' + (month < 10 ? '0' : '') + month,
-        outstanding: dueVal, recovered: 0, recoveryCount: 0, amount: 0 // amount filled in below
-      };
-    }
+    // A due can originate from a rent (room) row OR a food row — both carry
+    // Due/Party/_entryId in their canonical layout (Entry.gs). Column
+    // candidates come from entryFieldHeaders_ (Entry.gs, same-scope GAS
+    // call) so this never drifts from what the write side actually wrote.
+    ['rent', 'food'].forEach(function (sectionType) {
+      var sec = null;
+      for (var i = 0; i < det.sections.length; i++) {
+        if (det.sections[i].type === sectionType) { sec = det.sections[i]; break; }
+      }
+      if (!sec) return;
+      var heads = sec.heads;
+      var fh = entryFieldHeaders_(sectionType);
+      var dueCol = colFor_(heads, fh.due);
+      var idCol = colFor_(heads, fh.entryId);
+      if (dueCol === null || idCol === null) return; // nothing linkable on this section/tab
+      var partyCol = colFor_(heads, fh.party);
+      var roomCol = colFor_(heads, fh.room);
+      var lastDay = null;
+      for (var r = det.headerRow + 1; r < values.length; r++) {
+        var idRaw = values[r][idCol];
+        var dueId = (idRaw === null || idRaw === undefined) ? '' : String(idRaw).trim();
+        if (!dueId) continue; // legacy row, no id -> handled by the fallback path
+        var dueVal = num_(values[r][dueCol]) || 0; // current live outstanding (may be 0)
+        var d = dayOf_(values[r][sec.dateCol], month);
+        if (d === null) d = lastDay; else lastDay = d;
+        byId[dueId] = {
+          dueId: dueId, section: sectionType,
+          party: partyCol !== null ? String(values[r][partyCol] || '').replace(/\s+/g, ' ').trim() : '',
+          room: roomCol !== null ? String(values[r][roomCol] || '').replace(/\s+/g, ' ').trim() : '',
+          year: year, month: month, day: d, ym: year + '-' + (month < 10 ? '0' : '') + month,
+          outstanding: dueVal, recovered: 0, recoveryCount: 0, amount: 0 // amount filled in below
+        };
+      }
+    });
   });
   (tabs || []).forEach(function (tab) {
     var values = tab.values;
@@ -264,8 +272,12 @@ function canRecoverAmount_(due, amount) {
  *
  * Returns { parties:[{party,incurred,recovered,outstanding,lines:[...]}],
  *           scopes:{month,year,lifetime}, outstandingParties:[name,...],
- *           openDues:[{dueId,party,room,ym,year,month,day,amount,recovered,
- *                      outstanding},...] }  (openDues: outstanding>0, newest-first)
+ *           openDues:[{dueId,section('rent'|'food'),party,room,ym,year,month,
+ *                      day,amount,recovered,outstanding},...] }
+ *           (openDues: outstanding>0, newest-first). Each `line` inside a
+ *           party's `lines` also carries `section` — the linked due's origin
+ *           for a `type:'due'` line, or the paid-down due's origin for a
+ *           linked `type:'recovery'` line (undefined if unlinked/orphaned).
  */
 function buildDuesLedger_(tabs, now) {
   now = now || {};
@@ -283,7 +295,7 @@ function buildDuesLedger_(tabs, now) {
     b.incurred += d.amount;
     b.lines.push({
       type: 'due', year: d.year, month: d.month, day: d.day, amount: d.amount,
-      room: d.room, remark: '', dueId: d.dueId
+      room: d.room, remark: '', dueId: d.dueId, section: d.section
     });
   });
 
@@ -293,14 +305,17 @@ function buildDuesLedger_(tabs, now) {
     if (!det) return;
     det.sections.forEach(function (sec) {
       var heads = sec.heads;
-      if (sec.type === 'rent') {
+      if (sec.type === 'rent' || sec.type === 'food') {
         // Legacy dues only (no resolvable _entryId) — linked rows are already
         // counted above via dueIdx, so skip anything dueIdx already claimed.
-        var dueCol = colFor_(heads, ['due']);
+        // Column candidates from entryFieldHeaders_ (Entry.gs) so this stays
+        // in lockstep with the write side for both due-bearing sections.
+        var fh = entryFieldHeaders_(sec.type);
+        var dueCol = colFor_(heads, fh.due);
         if (dueCol === null) return;
-        var idCol = colFor_(heads, ['_entryid']);
-        var partyCol = colFor_(heads, ['party', 'debtor', 'guest']);
-        var roomCol = colFor_(heads, ['room with source', 'room no.', 'room no', 'room']);
+        var idCol = colFor_(heads, fh.entryId);
+        var partyCol = colFor_(heads, fh.party);
+        var roomCol = colFor_(heads, fh.room);
         var lastDay = null;
         for (var r = det.headerRow + 1; r < values.length; r++) {
           var due = num_(values[r][dueCol]);
@@ -316,7 +331,7 @@ function buildDuesLedger_(tabs, now) {
           b.lines.push({
             type: 'due', year: year, month: month, day: d0, amount: due,
             room: roomCol !== null ? String(values[r][roomCol] || '').replace(/\s+/g, ' ').trim() : '',
-            remark: ''
+            remark: '', section: sec.type
           });
         }
       } else if (sec.type === 'recovery') {
@@ -349,7 +364,8 @@ function buildDuesLedger_(tabs, now) {
             type: 'recovery', year: year, month: month, day: dd, amount: amt,
             room: rmcol !== null ? String(values[rr][rmcol] || '').replace(/\s+/g, ' ').trim() : '',
             remark: rkcol !== null ? String(values[rr][rkcol] || '').replace(/\s+/g, ' ').trim() : '',
-            dueId: ref || null, orphaned: orphaned
+            dueId: ref || null, orphaned: orphaned,
+            section: linkedDue ? linkedDue.section : undefined // which due type this pays down, if linked
           });
         }
       }
@@ -391,7 +407,7 @@ function buildDuesLedger_(tabs, now) {
     .filter(function (d) { return d.outstanding > 0; })
     .map(function (d) {
       return {
-        dueId: d.dueId, party: d.party || 'Unattributed', room: d.room, ym: d.ym,
+        dueId: d.dueId, section: d.section, party: d.party || 'Unattributed', room: d.room, ym: d.ym,
         year: d.year, month: d.month, day: d.day, amount: d.amount,
         recovered: d.recovered, outstanding: d.outstanding
       };

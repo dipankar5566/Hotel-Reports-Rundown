@@ -176,6 +176,8 @@ var FIELD_DEFS = {
     { key: 'amount', label: 'Amount (Rs)', type: 'number', req: true },
     { key: 'cash', label: 'Cash (Rs)', type: 'number' },
     { key: 'bank', label: 'Banking & UPI (Rs)', type: 'number' },
+    { key: 'due', label: 'Due (Rs)', type: 'number' },
+    { key: 'party', label: 'Guest / party (name a due)', type: 'text' },
     { key: 'remark', label: 'Remark (optional)', type: 'text' }
   ],
   expense: [
@@ -332,7 +334,7 @@ function wireMoneyCheck() {
   hint.className = 'muted hidden';
   hint.style.color = 'var(--danger)';
   $('fields').appendChild(hint);
-  var ids = ['f_amount', 'f_cash', 'f_bank'].concat(sec === 'rent' ? ['f_due'] : []);
+  var ids = ['f_amount', 'f_cash', 'f_bank'].concat((sec === 'rent' || sec === 'food') ? ['f_due'] : []);
   ids.forEach(function (id) {
     var el = $(id);
     if (el) el.oninput = updateMoneyHint;
@@ -346,13 +348,14 @@ function updateMoneyHint() {
   var amt = Number($('f_amount').value) || 0;
   var cash = ($('f_cash') && Number($('f_cash').value)) || 0;
   var bank = ($('f_bank') && Number($('f_bank').value)) || 0;
-  var due = (sec === 'rent' && $('f_due') && Number($('f_due').value)) || 0;
+  var hasDue = sec === 'rent' || sec === 'food';
+  var due = (hasDue && $('f_due') && Number($('f_due').value)) || 0;
   var sum = cash + bank + due;
   if (!amt && !sum) { hint.classList.add('hidden'); return; }
   var diff = sum - amt;
   if (Math.abs(diff) <= 0.01) { hint.classList.add('hidden'); return; }
   hint.classList.remove('hidden');
-  hint.textContent = (sec === 'rent' ? 'Cash+Bank+Due' : 'Cash+Bank') + ' = Rs ' + fmt(sum) +
+  hint.textContent = (hasDue ? 'Cash+Bank+Due' : 'Cash+Bank') + ' = Rs ' + fmt(sum) +
     ', Amount = Rs ' + fmt(amt) + ' (' + (diff < 0 ? 'short' : 'over') + ' by Rs ' + fmt(Math.abs(diff)) + ')';
 }
 
@@ -397,7 +400,9 @@ function renderDueResults(q) {
   filtered.forEach(function (d) {
     var row = document.createElement('div'); row.className = 'party';
     row.innerHTML = '<div class="top"><span class="nm">' + escapeHtml(d.party) +
-      (d.room ? (' · ' + escapeHtml(d.room)) : '') + '</span><span class="ob">Rs ' + fmt(d.outstanding) + '</span></div>' +
+      (d.room ? (' · ' + escapeHtml(d.room)) : '') +
+      (dueSectionTag(d.section) ? ' <span class="muted" style="font-size:11px">[' + dueSectionTag(d.section) + ']</span>' : '') +
+      '</span><span class="ob">Rs ' + fmt(d.outstanding) + '</span></div>' +
       '<div class="muted" style="font-size:12px">' + dLabel(d) + '</div>';
     row.onclick = function () { pickDue(d); };
     results.appendChild(row);
@@ -699,6 +704,13 @@ function dLabel(ln) {
   return (ln.day || '?') + ' ' + mm + ' ' + String(ln.year).slice(-2);
 }
 
+// A due can originate from a rent (room) or food row — tag it so staff can
+// tell apart two dues for the same guest (e.g. an unpaid room + an unpaid
+// meal tab).
+function dueSectionTag(section) {
+  return section === 'food' ? 'Food' : section === 'rent' ? 'Room' : '';
+}
+
 function renderDues() {
   var d = DASH.dues; if (!d) return;
   var sc = d.scopes[DASH.scope] || { incurred: 0, recovered: 0, outstanding: 0 };
@@ -719,6 +731,7 @@ function renderDues() {
       return '<div class="ln ' + (ln.type === 'recovery' ? 'rec' : '') + '"><span>' +
         dLabel(ln) + ' · ' + (ln.type === 'recovery' ? 'recovered' : 'due') +
         (ln.room ? (' · ' + escapeHtml(ln.room)) : '') +
+        (dueSectionTag(ln.section) ? (' · ' + dueSectionTag(ln.section)) : '') +
         (ln.orphaned ? ' · <span style="color:var(--danger)">⚠ unlinked</span>' : '') +
         '</span><span>' +
         (ln.type === 'recovery' ? '−' : '+') + fmt(ln.amount) + '</span></div>';

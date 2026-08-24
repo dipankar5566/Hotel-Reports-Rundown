@@ -35,7 +35,10 @@ function canonicalLayout_(section) {
             'Cash', 'Banking & UPI', 'GST', 'Due', 'Discount', 'Remark', 'Party', 'Entered by', '_entryId'];
   }
   if (section === 'food') {
-    return ['Date', 'Room (food & others)', 'Amount', 'Cash', 'Banking & UPI', 'Remark', 'Entered by', '_entryId'];
+    // Due/Party mirror rent's due-tracking pipeline (see buildDueIndex_ in
+    // Report.gs) — an unpaid food bill is trackable exactly like an unpaid
+    // room bill, same hard-link mechanics via _entryId/Due ref.
+    return ['Date', 'Room (food & others)', 'Amount', 'Cash', 'Banking & UPI', 'Due', 'Remark', 'Party', 'Entered by', '_entryId'];
   }
   if (section === 'recovery') {
     // Due-recovery ledger. Anchor header 'Recovery party' is what anchorType_
@@ -112,6 +115,8 @@ function entryFieldHeaders_(section) {
   } else if (section === 'food') {
     map.room = ['room (food & others)', 'room'];
     map.remark = ['remark', 'remarks'];
+    map.due = ['due'];
+    map.party = ['party', 'debtor', 'guest']; // debtor named when Due > 0, same as rent
   } else if (section === 'recovery') {
     // cash/bank already set universally above (used by rent/food/recovery).
     map.party = ['recovery party', 'party', 'debtor', 'guest'];
@@ -136,7 +141,7 @@ function essentialFields_(section) {
 /** Ordered field list per section for building/writing a row. */
 function entryWriteFields_(section) {
   if (section === 'rent') return ['room', 'source', 'nights', 'amount', 'cash', 'bank', 'gst', 'due', 'discount', 'remark', 'party', 'enteredBy'];
-  if (section === 'food') return ['room', 'amount', 'cash', 'bank', 'remark', 'enteredBy'];
+  if (section === 'food') return ['room', 'amount', 'cash', 'bank', 'due', 'party', 'remark', 'enteredBy'];
   if (section === 'recovery') return ['party', 'room', 'amount', 'cash', 'bank', 'remark', 'dueRef', 'enteredBy'];
   return ['category', 'amount', 'remark', 'enteredBy']; // expense
 }
@@ -343,17 +348,32 @@ function ensureEnteredByColumn_(sheet, values, res, section) {
   return resolveWriteCols_(fresh, section);
 }
 
-/** Rent only: ensure a 'Party' column exists so a due can be attributed to a
- * debtor. Canonical app tabs have it; this fires on rent tabs created before
- * Party existed. Inserted immediately LEFT of _entryId (stays inside the rent
- * detect window). Returns a re-resolved cols object. */
+/** Ensure a 'Party' column exists so a due (rent OR food) can be attributed
+ * to a debtor. Canonical app tabs have it; this fires on rent/food tabs
+ * created before Party existed on that section. Inserted immediately LEFT
+ * of _entryId (stays inside the section's detect window). Returns a
+ * re-resolved cols object. */
 function ensurePartyColumn_(sheet, values, res, section) {
-  if (section !== 'rent') return res;
   if (res.cols.party !== null && res.cols.party !== undefined) return res;
   var idCol = res.cols.entryId;
   if (idCol === null || idCol === undefined) return res; // no anchor -> skip (party dropped gracefully)
   sheet.insertColumnBefore(idCol + 1);                   // 1-based; pushes _entryId right by one
   sheet.getRange(res.headerRow + 1, idCol + 1).setValue('Party');
+  var fresh = sheet.getDataRange().getValues();
+  return resolveWriteCols_(fresh, section);
+}
+
+/** Ensure a 'Due' column exists so a food row can carry an outstanding
+ * balance, same as rent (rent has always had Due baked into its canonical
+ * layout, so this never fires for rent in practice — kept generic rather
+ * than food-gated, matching ensurePartyColumn_'s shape). Inserted
+ * immediately LEFT of _entryId. Returns a re-resolved cols object. */
+function ensureDueColumn_(sheet, values, res, section) {
+  if (res.cols.due !== null && res.cols.due !== undefined) return res;
+  var idCol = res.cols.entryId;
+  if (idCol === null || idCol === undefined) return res; // no anchor -> skip (due dropped gracefully)
+  sheet.insertColumnBefore(idCol + 1);                   // 1-based; pushes _entryId right by one
+  sheet.getRange(res.headerRow + 1, idCol + 1).setValue('Due');
   var fresh = sheet.getDataRange().getValues();
   return resolveWriteCols_(fresh, section);
 }
@@ -428,27 +448,32 @@ function ensureRecoveryBankColumn_(sheet, values, res, section) {
   return resolveWriteCols_(fresh, section);
 }
 
-/** Locate the SHEET+ROW of a rent row by its own _entryId, scanning every
- * tabMonth_-named sheet in the book — the linked due may live in a different
- * month's tab than the recovery referencing it (partial payments over time).
- * Returns { sheet, rowNum, dueCol, cashCol, bankCol, remarkCol } (any of
- * cashCol/bankCol/remarkCol may be null on a tab missing that header — Due is
- * required, the others are not) or null if not found (deleted/unknown). */
-function findRentDueRowById_(ss, dueId) {
+/** Locate the SHEET+ROW of a due-bearing booking row (rent OR food) by its
+ * own _entryId, scanning every tabMonth_-named sheet in the book and both
+ * section types — the linked due may live in a different month's tab than
+ * the recovery referencing it (partial payments over time), and may
+ * originate from either section. Returns { sheet, rowNum, section, dueCol,
+ * cashCol, bankCol, remarkCol } (any of cashCol/bankCol/remarkCol may be
+ * null on a tab missing that header — Due is required, the others are not)
+ * or null if not found (deleted/unknown). */
+function findDueRowById_(ss, dueId) {
   var sheets = ss.getSheets();
   for (var i = 0; i < sheets.length; i++) {
     if (!tabMonth(sheets[i].getName())) continue;
     var values = sheets[i].getDataRange().getValues();
-    var res = resolveWriteCols_(values, 'rent');
-    var idCol = res.cols && res.cols.entryId;
-    var dueCol = res.cols && res.cols.due;
-    if (idCol === null || idCol === undefined || dueCol === null || dueCol === undefined) continue;
-    for (var r = res.headerRow + 1; r < values.length; r++) {
-      if (String(values[r][idCol]) === String(dueId)) {
-        return {
-          sheet: sheets[i], rowNum: r + 1, dueCol: dueCol,
-          cashCol: res.cols.cash, bankCol: res.cols.bank, remarkCol: res.cols.remark
-        };
+    for (var s = 0; s < 2; s++) {
+      var sectionType = ['rent', 'food'][s];
+      var res = resolveWriteCols_(values, sectionType);
+      var idCol = res.cols && res.cols.entryId;
+      var dueCol = res.cols && res.cols.due;
+      if (idCol === null || idCol === undefined || dueCol === null || dueCol === undefined) continue;
+      for (var r = res.headerRow + 1; r < values.length; r++) {
+        if (String(values[r][idCol]) === String(dueId)) {
+          return {
+            sheet: sheets[i], rowNum: r + 1, section: sectionType, dueCol: dueCol,
+            cashCol: res.cols.cash, bankCol: res.cols.bank, remarkCol: res.cols.remark
+          };
+        }
       }
     }
   }
@@ -472,7 +497,7 @@ function shortDateLabel_(year, month, day) {
  * (Remark has existed on rent since before this whole dues feature, so this
  * only fires on a genuinely pre-app row). */
 function stampRecoveryRemark_(ss, dueId, amount, year, month, day) {
-  var hit = findRentDueRowById_(ss, dueId);
+  var hit = findDueRowById_(ss, dueId);
   if (!hit || hit.remarkCol === null || hit.remarkCol === undefined) return false;
   var note = 'Recovered ₹' + amount + ' on ' + shortDateLabel_(year, month, day);
   hit.sheet.getRange(hit.rowNum, hit.remarkCol + 1).setValue(note);
@@ -494,7 +519,7 @@ function stampRecoveryRemark_(ss, dueId, amount, year, month, day) {
  * instant (a race the script lock already prevents) or the tab was otherwise
  * altered out of band. */
 function adjustDueCell_(ss, dueId, deltaDue, deltaCash, deltaBank) {
-  var hit = findRentDueRowById_(ss, dueId);
+  var hit = findDueRowById_(ss, dueId);
   if (!hit) return false;
   function bump(col, delta) {
     if (!delta || col === null || col === undefined) return;
@@ -594,17 +619,19 @@ function normalizeEntryPayload_(payload) {
   });
   // Cash+Bank(+Due) must reconcile to Amount — the row's own money-in figure
   // has to be internally consistent (see adjustDueCell_'s doc: "Cash + Bank +
-  // Due stays equal to a booking's Amount on that one row"). Rent has a Due
-  // column (partial/unpaid balance); food/recovery don't, so their full
-  // Amount must be Cash+Bank. Expense has no split fields — nothing to check.
+  // Due stays equal to a booking's Amount on that one row"). Rent and food
+  // both have a Due column (partial/unpaid balance) now that food's due
+  // pipeline mirrors rent's; recovery has no due concept of its own, so its
+  // full Amount must be Cash+Bank. Expense has no split fields — nothing to
+  // check.
   var cash = form.cash || 0, bank = form.bank || 0, due = form.due || 0;
-  if (section === 'rent') {
-    var rentSum = cash + bank + due;
-    if (Math.abs(rentSum - amt) > 0.01) {
-      throw new Error('Cash+Bank+Due = ₹' + rentSum + ' but Amount = ₹' + amt +
-        (rentSum < amt ? ' — short by ₹' + (amt - rentSum) + '.' : ' — over by ₹' + (rentSum - amt) + '.'));
+  if (section === 'rent' || section === 'food') {
+    var dueSum = cash + bank + due;
+    if (Math.abs(dueSum - amt) > 0.01) {
+      throw new Error('Cash+Bank+Due = ₹' + dueSum + ' but Amount = ₹' + amt +
+        (dueSum < amt ? ' — short by ₹' + (amt - dueSum) + '.' : ' — over by ₹' + (dueSum - amt) + '.'));
     }
-  } else if (section === 'food' || section === 'recovery') {
+  } else if (section === 'recovery') {
     var sum2 = cash + bank;
     if (Math.abs(sum2 - amt) > 0.01) {
       throw new Error('Cash+Bank = ₹' + sum2 + ' but Amount = ₹' + amt +
@@ -653,7 +680,11 @@ function submitEntry(payload) {
       values = sheet.getDataRange().getValues(); // may have changed again
     }
     if (norm.form.party) {
-      res = ensurePartyColumn_(sheet, values, res, norm.section); // rent debtor attribution
+      res = ensurePartyColumn_(sheet, values, res, norm.section); // debtor attribution (rent or food)
+      values = sheet.getDataRange().getValues();
+    }
+    if (norm.form.due && norm.section === 'food') {
+      res = ensureDueColumn_(sheet, values, res, norm.section); // rent already has Due baked in
       values = sheet.getDataRange().getValues();
     }
     if (norm.form.enteredBy) {
@@ -814,11 +845,12 @@ function updateEntry(payload) {
     if (!hit) throw new Error('Entry not found (it may have been changed in the sheet).');
     if (hit.section !== norm.section) throw new Error('Cannot move an entry between sections.');
 
-    // A rent row's Amount can't be edited once money's been recovered against
-    // it — the recovered figure was collected against the OLD amount, so
-    // changing it now would desync the whole due ledger (buildDueIndex_
-    // derives the original incurred amount as outstanding+recovered).
-    if (hit.section === 'rent') {
+    // A due-bearing row's (rent OR food) Amount can't be edited once money's
+    // been recovered against it — the recovered figure was collected against
+    // the OLD amount, so changing it now would desync the whole due ledger
+    // (buildDueIndex_ derives the original incurred amount as
+    // outstanding+recovered).
+    if (hit.section === 'rent' || hit.section === 'food') {
       var recAgainst = recoveredAgainstDue_(collectAllTabs_(ss), entryId);
       if (recAgainst.recovered > 0) {
         var amtColChk = hit.res.cols.amount;
@@ -869,8 +901,9 @@ function updateEntry(payload) {
     if (moving) {
       // The date edit crossed a month boundary — the row has to relocate to
       // the target month's tab. Keep the SAME entryId (never regenerate):
-      // findRentDueRowById_ already scans every month tab, so a rent row (or
-      // a recovery's dueRef pointing at one) keeps working across the move
+      // findDueRowById_ already scans every month tab (and both due-bearing
+      // section types), so a rent/food row (or a recovery's dueRef pointing
+      // at one) keeps working across the move
       // with zero extra bookkeeping. This is a relocation, not a deletion —
       // no canDeleteDue_ guard, no due-restore; the due amount/link isn't
       // going anywhere, only which physical row it lives on.
@@ -891,8 +924,12 @@ function updateEntry(payload) {
         res2 = ensureRemarkColumn_(targetSheet, values2, res2, hit.section);
         values2 = targetSheet.getDataRange().getValues();
       }
-      if (norm.form.party && hit.section === 'rent') {
+      if (norm.form.party && (hit.section === 'rent' || hit.section === 'food')) {
         res2 = ensurePartyColumn_(targetSheet, values2, res2, hit.section);
+        values2 = targetSheet.getDataRange().getValues();
+      }
+      if (norm.form.due && hit.section === 'food') {
+        res2 = ensureDueColumn_(targetSheet, values2, res2, hit.section);
         values2 = targetSheet.getDataRange().getValues();
       }
       if (norm.form.enteredBy) {
@@ -930,8 +967,11 @@ function updateEntry(payload) {
       if (norm.form.remark && (hit.section === 'rent' || hit.section === 'food' || hit.section === 'expense')) {
         hit.res = ensureRemarkColumn_(hit.sheet, hit.sheet.getDataRange().getValues(), hit.res, hit.section);
       }
-      if (norm.form.party && hit.section === 'rent') {
+      if (norm.form.party && (hit.section === 'rent' || hit.section === 'food')) {
         hit.res = ensurePartyColumn_(hit.sheet, hit.sheet.getDataRange().getValues(), hit.res, hit.section);
+      }
+      if (norm.form.due && hit.section === 'food') {
+        hit.res = ensureDueColumn_(hit.sheet, hit.sheet.getDataRange().getValues(), hit.res, hit.section);
       }
       if (norm.form.enteredBy) {
         hit.res = ensureEnteredByColumn_(hit.sheet, hit.sheet.getDataRange().getValues(), hit.res, hit.section);
@@ -976,7 +1016,7 @@ function deleteEntry(hotel, pin, ym, entryId) {
     var hit = findEntryById_(ss, p.year, p.month, entryId);
     if (!hit) throw new Error('Entry not found (it may have been changed in the sheet).');
     var res = hit.res;
-    if (hit.section === 'rent') {
+    if (hit.section === 'rent' || hit.section === 'food') {
       // Gated on recoveredAgainstDue_ alone, not the row's current Due value —
       // a fully-recovered due legitimately shows Due=0 while still having
       // recovery history that must not be orphaned.

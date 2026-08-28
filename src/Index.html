@@ -588,15 +588,16 @@ function runAiAnalysisClick() {
 // correct), then sums. Money-control fields that have no per-day data
 // (gst/dues/discounts/cash/bank) are set null so the AI won't cross-compare them.
 function truncateMonth(m, cutoffDay) {
-  var rentT = 0, foodT = 0, expT = 0, nightsT = 0, salaryT = 0, foodCostT = 0, roomsT = 0;
+  var rentT = 0, foodT = 0, expT = 0, nightsT = 0, salaryT = 0, foodCostT = 0, roomsT = 0, discT = 0;
   var byHotel = [];
   (m.hotels || []).forEach(function (h) {
-    var hr = 0, hrev = 0, he = 0, hn = 0;
+    var hr = 0, hrev = 0, he = 0, hn = 0, hDisc = 0;
     var days = h.days || {};
     Object.keys(days).forEach(function (dk) {
       if (parseInt(dk, 10) <= cutoffDay) {
         var x = days[dk];
         hr += x.rent || 0; hrev += x.rev || 0; he += x.exp || 0; hn += x.nights || 0;
+        hDisc += x.discount || 0;
       }
     });
     var hfood = hrev - hr;
@@ -605,11 +606,11 @@ function truncateMonth(m, cutoffDay) {
     var hSalary = Math.round(fullSalary * effDays / h.daysInMonth);
     var hFoodPct = h.food > 0 ? h.foodCost / h.food : 0;
     var hFoodCost = Math.round(hfood * hFoodPct);
-    var hRev = hr + hfood, hTotalCost = he + hSalary + hFoodCost, hNet = hRev - hTotalCost;
-    rentT += hr; foodT += hfood; expT += he; nightsT += hn; salaryT += hSalary; foodCostT += hFoodCost; roomsT += h.rooms || 0;
+    var hRev = hr + hfood - hDisc, hTotalCost = he + hSalary + hFoodCost, hNet = hRev - hTotalCost;
+    rentT += hr; foodT += hfood; expT += he; nightsT += hn; salaryT += hSalary; foodCostT += hFoodCost; roomsT += h.rooms || 0; discT += hDisc;
     byHotel.push({ hotel: h.hotel, revenue: Math.round(hRev), totalCost: Math.round(hTotalCost), net: Math.round(hNet) });
   });
-  var revenue = rentT + foodT;
+  var revenue = rentT + foodT - discT;
   var totalCost = expT + salaryT + foodCostT;
   var avail = roomsT * cutoffDay;
   return {

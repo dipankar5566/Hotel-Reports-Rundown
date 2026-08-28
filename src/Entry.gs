@@ -38,7 +38,7 @@ function canonicalLayout_(section) {
     // Due/Party mirror rent's due-tracking pipeline (see buildDueIndex_ in
     // Report.gs) — an unpaid food bill is trackable exactly like an unpaid
     // room bill, same hard-link mechanics via _entryId/Due ref.
-    return ['Date', 'Room (food & others)', 'Amount', 'Cash', 'Banking & UPI', 'Due', 'Remark', 'Party', 'Entered by', '_entryId'];
+    return ['Date', 'Room (food & others)', 'Amount', 'Cash', 'Banking & UPI', 'Due', 'Discount', 'Remark', 'Party', 'Entered by', '_entryId'];
   }
   if (section === 'recovery') {
     // Due-recovery ledger. Anchor header 'Recovery party' is what anchorType_
@@ -116,6 +116,7 @@ function entryFieldHeaders_(section) {
     map.room = ['room (food & others)', 'room'];
     map.remark = ['remark', 'remarks'];
     map.due = ['due'];
+    map.discount = ['discount', 'dicount'];
     map.party = ['party', 'debtor', 'guest']; // debtor named when Due > 0, same as rent
   } else if (section === 'recovery') {
     // cash/bank already set universally above (used by rent/food/recovery).
@@ -141,7 +142,7 @@ function essentialFields_(section) {
 /** Ordered field list per section for building/writing a row. */
 function entryWriteFields_(section) {
   if (section === 'rent') return ['room', 'source', 'nights', 'amount', 'cash', 'bank', 'gst', 'due', 'discount', 'remark', 'party', 'enteredBy'];
-  if (section === 'food') return ['room', 'amount', 'cash', 'bank', 'due', 'party', 'remark', 'enteredBy'];
+  if (section === 'food') return ['room', 'amount', 'cash', 'bank', 'due', 'discount', 'party', 'remark', 'enteredBy'];
   if (section === 'recovery') return ['party', 'room', 'amount', 'cash', 'bank', 'remark', 'dueRef', 'enteredBy'];
   return ['category', 'amount', 'remark', 'enteredBy']; // expense
 }
@@ -374,6 +375,22 @@ function ensureDueColumn_(sheet, values, res, section) {
   if (idCol === null || idCol === undefined) return res; // no anchor -> skip (due dropped gracefully)
   sheet.insertColumnBefore(idCol + 1);                   // 1-based; pushes _entryId right by one
   sheet.getRange(res.headerRow + 1, idCol + 1).setValue('Due');
+  var fresh = sheet.getDataRange().getValues();
+  return resolveWriteCols_(fresh, section);
+}
+
+/** Ensure a 'Discount' column exists (rent or food) so a waived amount can be
+ * recorded — canonical rent/food layouts both bake it in now, but a legacy
+ * manual staff tab (which may already carry a hand-typed Discount column
+ * under different positioning) or a pre-existing app tab from before this
+ * column was fully wired needs the same on-first-use retrofit as Due/Party.
+ * Inserted immediately LEFT of _entryId. Returns a re-resolved cols object. */
+function ensureDiscountColumn_(sheet, values, res, section) {
+  if (res.cols.discount !== null && res.cols.discount !== undefined) return res;
+  var idCol = res.cols.entryId;
+  if (idCol === null || idCol === undefined) return res; // no anchor -> skip (discount dropped gracefully)
+  sheet.insertColumnBefore(idCol + 1);                   // 1-based; pushes _entryId right by one
+  sheet.getRange(res.headerRow + 1, idCol + 1).setValue('Discount');
   var fresh = sheet.getDataRange().getValues();
   return resolveWriteCols_(fresh, section);
 }
@@ -617,19 +634,23 @@ function normalizeEntryPayload_(payload) {
       form[f] = n;
     }
   });
-  // Cash+Bank(+Due) must reconcile to Amount — the row's own money-in figure
-  // has to be internally consistent (see adjustDueCell_'s doc: "Cash + Bank +
-  // Due stays equal to a booking's Amount on that one row"). Rent and food
-  // both have a Due column (partial/unpaid balance) now that food's due
-  // pipeline mirrors rent's; recovery has no due concept of its own, so its
-  // full Amount must be Cash+Bank. Expense has no split fields — nothing to
-  // check.
-  var cash = form.cash || 0, bank = form.bank || 0, due = form.due || 0;
+  // Cash+Bank(+Due) must reconcile to Amount minus Discount — the row's own
+  // money-in figure has to be internally consistent (see adjustDueCell_'s
+  // doc: "Cash + Bank + Due stays equal to a booking's Amount on that one
+  // row"; Amount is the full/list price, Discount reduces what's actually
+  // collectible and is never collected by anyone — not cash, not bank, not
+  // due). Rent and food both have Due and Discount columns now that food's
+  // pipeline mirrors rent's; recovery has no due/discount concept of its
+  // own, so its full Amount must be Cash+Bank. Expense has no split fields —
+  // nothing to check. A discount larger than Amount fails this same check
+  // (the target goes negative, dueSum can't match) — no separate guard needed.
+  var cash = form.cash || 0, bank = form.bank || 0, due = form.due || 0, discount = form.discount || 0;
   if (section === 'rent' || section === 'food') {
     var dueSum = cash + bank + due;
-    if (Math.abs(dueSum - amt) > 0.01) {
-      throw new Error('Cash+Bank+Due = ₹' + dueSum + ' but Amount = ₹' + amt +
-        (dueSum < amt ? ' — short by ₹' + (amt - dueSum) + '.' : ' — over by ₹' + (dueSum - amt) + '.'));
+    var target = amt - discount;
+    if (Math.abs(dueSum - target) > 0.01) {
+      throw new Error('Cash+Bank+Due = ₹' + dueSum + ' but Amount−Discount = ₹' + target +
+        (dueSum < target ? ' — short by ₹' + (target - dueSum) + '.' : ' — over by ₹' + (dueSum - target) + '.'));
     }
   } else if (section === 'recovery') {
     var sum2 = cash + bank;
@@ -685,6 +706,10 @@ function submitEntry(payload) {
     }
     if (norm.form.due && norm.section === 'food') {
       res = ensureDueColumn_(sheet, values, res, norm.section); // rent already has Due baked in
+      values = sheet.getDataRange().getValues();
+    }
+    if (norm.form.discount && (norm.section === 'rent' || norm.section === 'food')) {
+      res = ensureDiscountColumn_(sheet, values, res, norm.section);
       values = sheet.getDataRange().getValues();
     }
     if (norm.form.enteredBy) {
@@ -932,6 +957,10 @@ function updateEntry(payload) {
         res2 = ensureDueColumn_(targetSheet, values2, res2, hit.section);
         values2 = targetSheet.getDataRange().getValues();
       }
+      if (norm.form.discount && (hit.section === 'rent' || hit.section === 'food')) {
+        res2 = ensureDiscountColumn_(targetSheet, values2, res2, hit.section);
+        values2 = targetSheet.getDataRange().getValues();
+      }
       if (norm.form.enteredBy) {
         res2 = ensureEnteredByColumn_(targetSheet, values2, res2, hit.section);
         values2 = targetSheet.getDataRange().getValues();
@@ -972,6 +1001,9 @@ function updateEntry(payload) {
       }
       if (norm.form.due && hit.section === 'food') {
         hit.res = ensureDueColumn_(hit.sheet, hit.sheet.getDataRange().getValues(), hit.res, hit.section);
+      }
+      if (norm.form.discount && (hit.section === 'rent' || hit.section === 'food')) {
+        hit.res = ensureDiscountColumn_(hit.sheet, hit.sheet.getDataRange().getValues(), hit.res, hit.section);
       }
       if (norm.form.enteredBy) {
         hit.res = ensureEnteredByColumn_(hit.sheet, hit.sheet.getDataRange().getValues(), hit.res, hit.section);

@@ -3,7 +3,7 @@
  * with gzip'd CacheService caching (payload exceeds the 100KB plain limit).
  */
 
-var CACHE_KEY = 'dash_v15'; // v15: expense's expByCatRows[cat].particular now sources from the Remark cell (description) instead of the Particulars cell (which now holds the category itself) — Parser.gs expense redesign
+var CACHE_KEY = 'dash_v16'; // v16: Revenue/Net now net out rent+food Discount (previously an unnetted side-stat, and previously scoped to every section including expense); days[d] gains a discount field for the AI's day-truncated comparison
 var CACHE_SECS = 600; // 10 min
 
 function getDashboardData(forceRefresh) {
@@ -90,7 +90,6 @@ function buildPayloadFromBooks_(books, errors) {
       parsed.sections.forEach(function (s) {
         var d;
         entry.dueTotal += s.due || 0;
-        entry.discountTotal += s.discount || 0;
         if (s.type === 'rent') {
           entry.rent += s.total;
           entry.gst += s.gst;
@@ -98,17 +97,22 @@ function buildPayloadFromBooks_(books, errors) {
           entry.roomNights += s.nights > 0 ? s.nights : (s.roomRows || 0);
           entry.cashIn += s.cash;
           entry.bankIn += s.bank;
+          entry.discountTotal += s.discount || 0;
           for (d in s.sources) {
             entry.rentBySource[d] = (entry.rentBySource[d] || 0) + s.sources[d];
           }
           for (d in s.days) {
-            entry.days[d] = entry.days[d] || { rev: 0, exp: 0, rent: 0, nights: 0 };
+            entry.days[d] = entry.days[d] || { rev: 0, exp: 0, rent: 0, nights: 0, discount: 0 };
             entry.days[d].rev += s.days[d];
             entry.days[d].rent += s.days[d]; // room revenue only (for same-date ADR/RevPAR)
           }
           for (d in s.nightsByDay) {
-            entry.days[d] = entry.days[d] || { rev: 0, exp: 0, rent: 0, nights: 0 };
+            entry.days[d] = entry.days[d] || { rev: 0, exp: 0, rent: 0, nights: 0, discount: 0 };
             entry.days[d].nights += s.nightsByDay[d]; // room-nights per day (for same-date occupancy)
+          }
+          for (d in s.discountByDay) {
+            entry.days[d] = entry.days[d] || { rev: 0, exp: 0, rent: 0, nights: 0, discount: 0 };
+            entry.days[d].discount += s.discountByDay[d];
           }
           if (s.remarkRows && s.remarkRows.length) {
             entry.rentRemarkRows = entry.rentRemarkRows.concat(s.remarkRows.map(function (r) {
@@ -119,9 +123,14 @@ function buildPayloadFromBooks_(books, errors) {
           entry.food += s.total;
           entry.cashIn += s.cash;
           entry.bankIn += s.bank;
+          entry.discountTotal += s.discount || 0;
           for (d in s.days) {
-            entry.days[d] = entry.days[d] || { rev: 0, exp: 0, rent: 0, nights: 0 };
+            entry.days[d] = entry.days[d] || { rev: 0, exp: 0, rent: 0, nights: 0, discount: 0 };
             entry.days[d].rev += s.days[d];
+          }
+          for (d in s.discountByDay) {
+            entry.days[d] = entry.days[d] || { rev: 0, exp: 0, rent: 0, nights: 0, discount: 0 };
+            entry.days[d].discount += s.discountByDay[d];
           }
           if (s.remarkRows && s.remarkRows.length) {
             entry.foodRemarkRows = entry.foodRemarkRows.concat(s.remarkRows.map(function (r) {
@@ -153,7 +162,11 @@ function buildPayloadFromBooks_(books, errors) {
       for (var dnum in entry.days) {
         entry.days[dnum].net = entry.days[dnum].rev - entry.days[dnum].exp;
       }
-      entry.revenue = entry.rent + entry.food;
+      // Amount is booked at full/list price; Discount is never collected by
+      // anyone (not cash, not bank, not due), so it comes out of Revenue here
+      // — entry.rent/entry.food themselves stay GROSS (matching the sheet's
+      // own pivot and the days[d].rent/roomNights invariants untouched).
+      entry.revenue = entry.rent + entry.food - entry.discountTotal;
       // Dream only (Paradise's foodCostPct is 0): owner-assumed cost of
       // unbooked in-house kitchen ingredients, additive on top of
       // entry.expense (which already includes any real "Outside Food"

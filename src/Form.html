@@ -177,6 +177,7 @@ var FIELD_DEFS = {
     { key: 'cash', label: 'Cash (Rs)', type: 'number' },
     { key: 'bank', label: 'Banking & UPI (Rs)', type: 'number' },
     { key: 'due', label: 'Due (Rs)', type: 'number' },
+    { key: 'discount', label: 'Discount (Rs)', type: 'number' },
     { key: 'party', label: 'Guest / party (name a due)', type: 'text' },
     { key: 'remark', label: 'Remark (optional)', type: 'text' }
   ],
@@ -334,7 +335,7 @@ function wireMoneyCheck() {
   hint.className = 'muted hidden';
   hint.style.color = 'var(--danger)';
   $('fields').appendChild(hint);
-  var ids = ['f_amount', 'f_cash', 'f_bank'].concat((sec === 'rent' || sec === 'food') ? ['f_due'] : []);
+  var ids = ['f_amount', 'f_cash', 'f_bank'].concat((sec === 'rent' || sec === 'food') ? ['f_due', 'f_discount'] : []);
   ids.forEach(function (id) {
     var el = $(id);
     if (el) el.oninput = updateMoneyHint;
@@ -350,13 +351,16 @@ function updateMoneyHint() {
   var bank = ($('f_bank') && Number($('f_bank').value)) || 0;
   var hasDue = sec === 'rent' || sec === 'food';
   var due = (hasDue && $('f_due') && Number($('f_due').value)) || 0;
+  var discount = (hasDue && $('f_discount') && Number($('f_discount').value)) || 0;
   var sum = cash + bank + due;
-  if (!amt && !sum) { hint.classList.add('hidden'); return; }
-  var diff = sum - amt;
+  var target = amt - discount;
+  if (!amt && !sum && !discount) { hint.classList.add('hidden'); return; }
+  var diff = sum - target;
   if (Math.abs(diff) <= 0.01) { hint.classList.add('hidden'); return; }
   hint.classList.remove('hidden');
   hint.textContent = (hasDue ? 'Cash+Bank+Due' : 'Cash+Bank') + ' = Rs ' + fmt(sum) +
-    ', Amount = Rs ' + fmt(amt) + ' (' + (diff < 0 ? 'short' : 'over') + ' by Rs ' + fmt(Math.abs(diff)) + ')';
+    ', Amount' + (discount ? '−Discount' : '') + ' = Rs ' + fmt(target) +
+    ' (' + (diff < 0 ? 'short' : 'over') + ' by Rs ' + fmt(Math.abs(diff)) + ')';
 }
 
 // ---- recovery: pick-from-open-dues picker (hard link), not a native <select>

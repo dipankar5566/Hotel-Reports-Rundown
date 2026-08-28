@@ -211,7 +211,7 @@ function parseTab_(values, year, month) {
     var s = { type: t, rows: 0, roomRows: 0, total: 0, cash: 0, bank: 0, gst: 0,
               nights: 0, due: 0, discount: 0,
               days: {}, cats: {}, catRows: {}, sources: {}, nightsByDay: {},
-              remarkRows: [] };
+              discountByDay: {}, remarkRows: [] };
     var lastDay = null;
     for (var r = det.headerRow + 1; r < values.length; r++) {
       var row = values[r];
@@ -246,7 +246,10 @@ function parseTab_(values, year, month) {
       }
       // Due/Discount columns hold numbers or free text ("DUE PAID"); only sum numbers
       if (dueCol !== null) { var dv = num_(row[dueCol]); if (dv) s.due += dv; }
-      if (discCol !== null) { var xv = num_(row[discCol]); if (xv) s.discount += xv; }
+      if (discCol !== null) {
+        var xv = num_(row[discCol]);
+        if (xv) { s.discount += xv; s.discountByDay[d] = (s.discountByDay[d] || 0) + xv; }
+      }
       if (t === 'expense' && partCol !== null) {
         // The entry app writes the picked category directly into Particulars
         // (isKnownCategory_ recognizes it verbatim); an old explicit Category

@@ -524,6 +524,7 @@ function drawFood(cur) {
   ];
   if (dream) rows.push(['Dream food cost (assumed 40%)', inr(dreamCost)]);
   if (paradise) rows.push(['Paradise food cost (booked)', inr(paradiseCost)]);
+  if (paradise) rows.push(['Dream food amount (pass-through)', inr(paradise.dreamFoodAmount || 0)]);
   statRows('foodStats', rows);
 
   var noteParts = [];

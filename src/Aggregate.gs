@@ -3,7 +3,7 @@
  * with gzip'd CacheService caching (payload exceeds the 100KB plain limit).
  */
 
-var CACHE_KEY = 'dash_v16'; // v16: Revenue/Net now net out rent+food Discount (previously an unnetted side-stat, and previously scoped to every section including expense); days[d] gains a discount field for the AI's day-truncated comparison
+var CACHE_KEY = 'dash_v17'; // v17: new entry.dreamFoodAmount (Paradise-only, pass-through — food Paradise recorded that actually came from Dream's kitchen; never netted into revenue/net); days[d] gains a dreamFoodAmount field
 var CACHE_SECS = 600; // 10 min
 
 function getDashboardData(forceRefresh) {
@@ -73,7 +73,7 @@ function buildPayloadFromBooks_(books, errors) {
         rent: 0, food: 0, expense: 0,
         gst: 0, cashIn: 0, bankIn: 0,
         roomNights: 0, bookings: 0,
-        dueTotal: 0, discountTotal: 0,
+        dueTotal: 0, discountTotal: 0, dreamFoodAmount: 0,
         rooms: hotelCfg ? hotelCfg.rooms : 0,
         daysInMonth: daysInMonth,
         daysElapsed: daysElapsed,
@@ -102,16 +102,16 @@ function buildPayloadFromBooks_(books, errors) {
             entry.rentBySource[d] = (entry.rentBySource[d] || 0) + s.sources[d];
           }
           for (d in s.days) {
-            entry.days[d] = entry.days[d] || { rev: 0, exp: 0, rent: 0, nights: 0, discount: 0 };
+            entry.days[d] = entry.days[d] || { rev: 0, exp: 0, rent: 0, nights: 0, discount: 0, dreamFoodAmount: 0 };
             entry.days[d].rev += s.days[d];
             entry.days[d].rent += s.days[d]; // room revenue only (for same-date ADR/RevPAR)
           }
           for (d in s.nightsByDay) {
-            entry.days[d] = entry.days[d] || { rev: 0, exp: 0, rent: 0, nights: 0, discount: 0 };
+            entry.days[d] = entry.days[d] || { rev: 0, exp: 0, rent: 0, nights: 0, discount: 0, dreamFoodAmount: 0 };
             entry.days[d].nights += s.nightsByDay[d]; // room-nights per day (for same-date occupancy)
           }
           for (d in s.discountByDay) {
-            entry.days[d] = entry.days[d] || { rev: 0, exp: 0, rent: 0, nights: 0, discount: 0 };
+            entry.days[d] = entry.days[d] || { rev: 0, exp: 0, rent: 0, nights: 0, discount: 0, dreamFoodAmount: 0 };
             entry.days[d].discount += s.discountByDay[d];
           }
           if (s.remarkRows && s.remarkRows.length) {
@@ -124,13 +124,18 @@ function buildPayloadFromBooks_(books, errors) {
           entry.cashIn += s.cash;
           entry.bankIn += s.bank;
           entry.discountTotal += s.discount || 0;
+          entry.dreamFoodAmount += s.dreamFoodAmount || 0;
           for (d in s.days) {
-            entry.days[d] = entry.days[d] || { rev: 0, exp: 0, rent: 0, nights: 0, discount: 0 };
+            entry.days[d] = entry.days[d] || { rev: 0, exp: 0, rent: 0, nights: 0, discount: 0, dreamFoodAmount: 0 };
             entry.days[d].rev += s.days[d];
           }
           for (d in s.discountByDay) {
-            entry.days[d] = entry.days[d] || { rev: 0, exp: 0, rent: 0, nights: 0, discount: 0 };
+            entry.days[d] = entry.days[d] || { rev: 0, exp: 0, rent: 0, nights: 0, discount: 0, dreamFoodAmount: 0 };
             entry.days[d].discount += s.discountByDay[d];
+          }
+          for (d in s.dreamFoodAmountByDay) {
+            entry.days[d] = entry.days[d] || { rev: 0, exp: 0, rent: 0, nights: 0, discount: 0, dreamFoodAmount: 0 };
+            entry.days[d].dreamFoodAmount += s.dreamFoodAmountByDay[d];
           }
           if (s.remarkRows && s.remarkRows.length) {
             entry.foodRemarkRows = entry.foodRemarkRows.concat(s.remarkRows.map(function (r) {

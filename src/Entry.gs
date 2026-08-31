@@ -38,7 +38,7 @@ function canonicalLayout_(section) {
     // Due/Party mirror rent's due-tracking pipeline (see buildDueIndex_ in
     // Report.gs) — an unpaid food bill is trackable exactly like an unpaid
     // room bill, same hard-link mechanics via _entryId/Due ref.
-    return ['Date', 'Room (food & others)', 'Amount', 'Cash', 'Banking & UPI', 'Due', 'Discount', 'Remark', 'Party', 'Entered by', '_entryId'];
+    return ['Date', 'Room (food & others)', 'Amount', 'Cash', 'Banking & UPI', 'Due', 'Discount', 'Dream Food Amount', 'Remark', 'Party', 'Entered by', '_entryId'];
   }
   if (section === 'recovery') {
     // Due-recovery ledger. Anchor header 'Recovery party' is what anchorType_
@@ -118,6 +118,10 @@ function entryFieldHeaders_(section) {
     map.due = ['due'];
     map.discount = ['discount', 'dicount'];
     map.party = ['party', 'debtor', 'guest']; // debtor named when Due > 0, same as rent
+    // Paradise-only, pass-through: food Paradise recorded that actually came
+    // from Dream's kitchen. See ensureDreamFoodAmountColumn_ + the hotel guard
+    // in submitEntry/updateEntry.
+    map.dreamFoodAmount = ['dream food amount', 'dream food amt'];
   } else if (section === 'recovery') {
     // cash/bank already set universally above (used by rent/food/recovery).
     map.party = ['recovery party', 'party', 'debtor', 'guest'];
@@ -142,7 +146,7 @@ function essentialFields_(section) {
 /** Ordered field list per section for building/writing a row. */
 function entryWriteFields_(section) {
   if (section === 'rent') return ['room', 'source', 'nights', 'amount', 'cash', 'bank', 'gst', 'due', 'discount', 'remark', 'party', 'enteredBy'];
-  if (section === 'food') return ['room', 'amount', 'cash', 'bank', 'due', 'discount', 'party', 'remark', 'enteredBy'];
+  if (section === 'food') return ['room', 'amount', 'cash', 'bank', 'due', 'discount', 'dreamFoodAmount', 'party', 'remark', 'enteredBy'];
   if (section === 'recovery') return ['party', 'room', 'amount', 'cash', 'bank', 'remark', 'dueRef', 'enteredBy'];
   return ['category', 'amount', 'remark', 'enteredBy']; // expense
 }
@@ -395,6 +399,23 @@ function ensureDiscountColumn_(sheet, values, res, section) {
   return resolveWriteCols_(fresh, section);
 }
 
+/** Ensure a 'Dream Food Amount' column exists on a Paradise food tab —
+ * pass-through/informational (food Paradise recorded that actually came from
+ * Dream's kitchen; see Parser.gs). Food-only, and only ever called by
+ * callers already gated on hotel === 'Paradise' (submitEntry/updateEntry) —
+ * this function itself doesn't re-check the hotel, matching how
+ * ensureDueColumn_ stays generic rather than food-gated. Inserted immediately
+ * LEFT of _entryId, same retrofit pattern as Due/Discount/Party. */
+function ensureDreamFoodAmountColumn_(sheet, values, res, section) {
+  if (res.cols.dreamFoodAmount !== null && res.cols.dreamFoodAmount !== undefined) return res;
+  var idCol = res.cols.entryId;
+  if (idCol === null || idCol === undefined) return res; // no anchor -> skip (dropped gracefully)
+  sheet.insertColumnBefore(idCol + 1);                   // 1-based; pushes _entryId right by one
+  sheet.getRange(res.headerRow + 1, idCol + 1).setValue('Dream Food Amount');
+  var fresh = sheet.getDataRange().getValues();
+  return resolveWriteCols_(fresh, section);
+}
+
 /** Recovery only: ensure the tab has a recovery section. App-created tabs get it
  * from canonicalHeaderRow_; a tab that predates this feature has none, so we lay
  * the recovery header block down two columns right of the last used header (one
@@ -627,7 +648,7 @@ function normalizeEntryPayload_(payload) {
   var amt = Number(form.amount);
   if (!(amt > 0)) throw new Error('Amount must be a positive number.'); // 0 rows are skipped by the parser
   form.amount = amt;
-  ['nights', 'cash', 'bank', 'gst', 'due', 'discount'].forEach(function (f) {
+  ['nights', 'cash', 'bank', 'gst', 'due', 'discount', 'dreamFoodAmount'].forEach(function (f) {
     if (form[f] !== null && form[f] !== undefined && form[f] !== '') {
       var n = Number(form[f]);
       if (isNaN(n)) throw new Error('"' + f + '" must be a number.');
@@ -677,6 +698,9 @@ function submitEntry(payload) {
   var hotel = (payload || {}).hotel;
   verifyPin_(hotel, (payload || {}).pin);
   var norm = normalizeEntryPayload_(payload);
+  // Dream Food Amount is Paradise-only; the client hides the field for Dream,
+  // but the server is the real guard — never write/retrofit it off-hotel.
+  if (hotel !== 'Paradise') delete norm.form.dreamFoodAmount;
   var cfg = hotelCfg_(hotel);
   var lock = LockService.getScriptLock();
   lock.waitLock(20000);
@@ -710,6 +734,10 @@ function submitEntry(payload) {
     }
     if (norm.form.discount && (norm.section === 'rent' || norm.section === 'food')) {
       res = ensureDiscountColumn_(sheet, values, res, norm.section);
+      values = sheet.getDataRange().getValues();
+    }
+    if (norm.form.dreamFoodAmount && hotel === 'Paradise' && norm.section === 'food') {
+      res = ensureDreamFoodAmountColumn_(sheet, values, res, norm.section);
       values = sheet.getDataRange().getValues();
     }
     if (norm.form.enteredBy) {
@@ -811,7 +839,7 @@ function listEntries(hotel, pin, ym) {
       var res = resolveWriteCols_(values, section);
       var idCol = res.cols && res.cols.entryId;
       if (idCol === null || idCol === undefined) return;
-      var numericFields = ['amount', 'nights', 'cash', 'bank', 'gst', 'due', 'discount'];
+      var numericFields = ['amount', 'nights', 'cash', 'bank', 'gst', 'due', 'discount', 'dreamFoodAmount'];
       for (var r = res.headerRow + 1; r < values.length; r++) {
         var id = values[r][idCol];
         if (id === null || id === undefined || id === '') continue;
@@ -855,6 +883,7 @@ function updateEntry(payload) {
   var entryId = (payload || {}).entryId;
   if (!entryId) throw new Error('No entryId to update.');
   var norm = normalizeEntryPayload_(payload);
+  if (hotel !== 'Paradise') delete norm.form.dreamFoodAmount; // Paradise-only; server is the real guard
   // The row may still live in the month it was ORIGINALLY entered under, not
   // the (possibly just-edited) date's month — findEntryById_ only searches
   // one tab, so it must be pointed at the entry's current tab, not the new
@@ -961,6 +990,10 @@ function updateEntry(payload) {
         res2 = ensureDiscountColumn_(targetSheet, values2, res2, hit.section);
         values2 = targetSheet.getDataRange().getValues();
       }
+      if (norm.form.dreamFoodAmount && hotel === 'Paradise' && hit.section === 'food') {
+        res2 = ensureDreamFoodAmountColumn_(targetSheet, values2, res2, hit.section);
+        values2 = targetSheet.getDataRange().getValues();
+      }
       if (norm.form.enteredBy) {
         res2 = ensureEnteredByColumn_(targetSheet, values2, res2, hit.section);
         values2 = targetSheet.getDataRange().getValues();
@@ -1004,6 +1037,9 @@ function updateEntry(payload) {
       }
       if (norm.form.discount && (hit.section === 'rent' || hit.section === 'food')) {
         hit.res = ensureDiscountColumn_(hit.sheet, hit.sheet.getDataRange().getValues(), hit.res, hit.section);
+      }
+      if (norm.form.dreamFoodAmount && hotel === 'Paradise' && hit.section === 'food') {
+        hit.res = ensureDreamFoodAmountColumn_(hit.sheet, hit.sheet.getDataRange().getValues(), hit.res, hit.section);
       }
       if (norm.form.enteredBy) {
         hit.res = ensureEnteredByColumn_(hit.sheet, hit.sheet.getDataRange().getValues(), hit.res, hit.section);

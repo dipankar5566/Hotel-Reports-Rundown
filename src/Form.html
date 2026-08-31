@@ -178,6 +178,10 @@ var FIELD_DEFS = {
     { key: 'bank', label: 'Banking & UPI (Rs)', type: 'number' },
     { key: 'due', label: 'Due (Rs)', type: 'number' },
     { key: 'discount', label: 'Discount (Rs)', type: 'number' },
+    // Paradise-only: food Paradise recorded that actually came from Dream's
+    // kitchen. Pass-through/informational, excluded from the money-hint
+    // reconciliation below. hotelOnly filtered in visibleFieldDefs().
+    { key: 'dreamFoodAmount', label: 'Dream Food Amount (Rs)', type: 'number', hotelOnly: 'Paradise' },
     { key: 'party', label: 'Guest / party (name a due)', type: 'text' },
     { key: 'remark', label: 'Remark (optional)', type: 'text' }
   ],
@@ -200,6 +204,15 @@ var FIELD_DEFS = {
     { key: 'remark', label: 'Remark (optional)', type: 'text' }
   ]
 };
+
+// Fields can be hotelOnly (e.g. Paradise's Dream Food Amount) — filter once
+// here so buildFields() and collectPayload() never disagree on which fields
+// exist for the currently unlocked hotel.
+function visibleFieldDefs(section) {
+  return FIELD_DEFS[section].filter(function (d) {
+    return !d.hotelOnly || d.hotelOnly === STATE.hotel;
+  });
+}
 
 function $(id) { return document.getElementById(id); }
 
@@ -266,7 +279,7 @@ function selectSection(sec) {
 
 function buildFields(prefill) {
   var box = $('fields'); box.innerHTML = '';
-  FIELD_DEFS[STATE.section].forEach(function (def) {
+  visibleFieldDefs(STATE.section).forEach(function (def) {
     var el, opts;
     if (def.type === 'hidden') {
       el = document.createElement('input'); el.type = 'hidden';
@@ -456,7 +469,7 @@ function collectPayload() {
   if (!dateStr) { toast('Pick a date.', true); return null; }
   var parts = dateStr.split('-');
   var fields = {};
-  var defs = FIELD_DEFS[STATE.section];
+  var defs = visibleFieldDefs(STATE.section);
   for (var i = 0; i < defs.length; i++) {
     var d = defs[i];
     var v = $('f_' + d.key).value;

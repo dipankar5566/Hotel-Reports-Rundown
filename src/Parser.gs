@@ -199,6 +199,12 @@ function parseTab_(values, year, month) {
       : null;
     var dueCol = colFor_(heads, ['due']);
     var discCol = colFor_(heads, ['discount', 'dicount']);
+    // Paradise-only: food that Paradise recorded but actually came from
+    // Dream's kitchen. Pass-through/informational — never nets into any
+    // total, just a side-stat (see Aggregate.gs). Hotel-agnostic here like
+    // every other column: Dream's sheets simply lack this header, so colFor_
+    // resolves null and the sum stays 0.
+    var dreamFoodAmtCol = t === 'food' ? colFor_(heads, ['dream food amount', 'dream food amt']) : null;
     // Free-text remark on rent/food rows (staff sheets already carry it). Read
     // additively into remarkRows; never touches any total, so the pivot invariant holds.
     // Expense also reads Remark, but as the expense LINE'S DESCRIPTION (see the
@@ -209,9 +215,9 @@ function parseTab_(values, year, month) {
       return;
     }
     var s = { type: t, rows: 0, roomRows: 0, total: 0, cash: 0, bank: 0, gst: 0,
-              nights: 0, due: 0, discount: 0,
+              nights: 0, due: 0, discount: 0, dreamFoodAmount: 0,
               days: {}, cats: {}, catRows: {}, sources: {}, nightsByDay: {},
-              discountByDay: {}, remarkRows: [] };
+              discountByDay: {}, dreamFoodAmountByDay: {}, remarkRows: [] };
     var lastDay = null;
     for (var r = det.headerRow + 1; r < values.length; r++) {
       var row = values[r];
@@ -249,6 +255,10 @@ function parseTab_(values, year, month) {
       if (discCol !== null) {
         var xv = num_(row[discCol]);
         if (xv) { s.discount += xv; s.discountByDay[d] = (s.discountByDay[d] || 0) + xv; }
+      }
+      if (dreamFoodAmtCol !== null) {
+        var dfv = num_(row[dreamFoodAmtCol]);
+        if (dfv) { s.dreamFoodAmount += dfv; s.dreamFoodAmountByDay[d] = (s.dreamFoodAmountByDay[d] || 0) + dfv; }
       }
       if (t === 'expense' && partCol !== null) {
         // The entry app writes the picked category directly into Particulars

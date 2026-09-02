@@ -122,6 +122,8 @@
         <strong>Daily report</strong>
         <label>Month</label>
         <select id="repMonth"></select>
+        <button class="mini ed" id="exportBtn" style="margin-top:8px">Download Excel (for CA)</button>
+        <p class="muted" id="exportStatus"></p>
         <div id="repTable"><p class="muted">—</p></div>
       </div>
 
@@ -689,6 +691,33 @@ function renderDailyReport(rep) {
     fmt(t.expense) + '</td><td>' + fmt(t.recoveryCash) + '</td><td>' + fmt(t.recoveryBank) + '</td><td>' + fmt(t.net) + '</td></tr></tbody></table></div>';
   $('repTable').innerHTML = h;
 }
+
+// ---- month export (xlsx, for the CA) ----
+$('exportBtn').onclick = function () {
+  var ym = $('repMonth').value; if (!ym) return;
+  var btn = $('exportBtn');
+  btn.disabled = true;
+  $('exportStatus').textContent = 'Preparing file...';
+  google.script.run
+    .withSuccessHandler(function (res) {
+      var bytes = atob(res.base64);
+      var arr = new Uint8Array(bytes.length);
+      for (var i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+      var blob = new Blob([arr], { type: res.mimeType });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url; a.download = res.filename;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      btn.disabled = false;
+      $('exportStatus').textContent = '';
+    })
+    .withFailureHandler(function (err) {
+      btn.disabled = false;
+      $('exportStatus').textContent = errText(err);
+    })
+    .exportMonthWorkbook(STATE.hotel, STATE.pin, ym);
+};
 
 // ---- due tracker ----
 function buildScopeChips() {

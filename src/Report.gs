@@ -1,7 +1,7 @@
 /**
  * Report.gs: read-only server for the staff PWA's Dashboard view.
  *
- * Two things the owner asked for, both scoped to the PIN'd hotel:
+ * Three things the owner asked for, all scoped to the PIN'd hotel:
  *   1. Daily entry report — per-day rent/food/expense/recovery totals for a
  *      chosen month (getDailyReport).
  *   2. Per-party due tracker — reconciles dues incurred against recoveries
@@ -11,6 +11,11 @@
  *      foreign key — buildDueIndex_); only recoveries with no link, or a link
  *      that no longer resolves, fall back to matching by normalized 'Party'
  *      text (the legacy behavior, kept for dues that predate _entryId/Due ref).
+ *   3. Month export for the Chartered Accountant — one chosen month rebuilt as
+ *      a clean 5-tab .xlsx workbook, downloadable from the entry app's
+ *      Dashboard view (exportMonthWorkbook). Reuses Entry.gs's own
+ *      resolveWriteCols_/entryWriteFields_/canonicalLayout_ so the exported
+ *      columns are exactly the ones the entry app itself reads and writes.
  *
  * The rent 'Due' cell is LIVE, not a frozen original: Entry.gs's submitEntry/
  * updateEntry/deleteEntry write the linked due's Due cell down (or back up) by
@@ -430,6 +435,47 @@ function collectAllTabs_(ss) {
   return tabs;
 }
 
+/** Row-level detail for one section of one month tab, for the CA xlsx export
+ * (exportMonthWorkbook below). Reuses Entry.gs's own resolveWriteCols_ so the export
+ * reads exactly the columns the entry app itself writes into, on both
+ * app-created and legacy tabs. Mirrors parseTab_'s row walk (skip null/zero
+ * amount rows, blank date carries the previous row's day) so a row-level date
+ * never disagrees with parseTab_'s own day-bucketed totals.
+ * Returns [{ date: Date, cells: [ordered values, one per entryWriteFields_ field] }]. */
+function buildExportRows_(values, section, year, month) {
+  var res = resolveWriteCols_(values, section);
+  if (!res.ok) return [];
+  var cols = res.cols;
+  var fields = entryWriteFields_(section);
+  var rows = [];
+  var lastDay = null;
+  for (var r = res.headerRow + 1; r < values.length; r++) {
+    var row = values[r];
+    var amt = cols.amount !== null && cols.amount !== undefined ? num_(row[cols.amount]) : null;
+    if (amt === null || amt === 0) continue;
+    var d = dayOf_(row[cols.date], month);
+    if (d === null) { if (lastDay !== null) d = lastDay; else continue; }
+    lastDay = d;
+    var cells = fields.map(function (f) {
+      var c = cols[f];
+      return (c === null || c === undefined) ? '' : row[c];
+    });
+    rows.push({ date: new Date(year, month - 1, d), cells: cells });
+  }
+  return rows;
+}
+
+/** The Sheet for a given hotel book + year/month, or null. Factors out the
+ * lookup loop getDailyReport already did inline (same for exportMonthWorkbook). */
+function findMonthSheet_(ss, year, month) {
+  var sheets = ss.getSheets();
+  for (var i = 0; i < sheets.length; i++) {
+    var t = tabMonth(sheets[i].getName());
+    if (t && t.year === year && t.month === month) return sheets[i];
+  }
+  return null;
+}
+
 /** Daily report for one month. ym = 'YYYY-MM'. PIN-gated, hotel-scoped. */
 function getDailyReport(hotel, pin, ym) {
   verifyPin_(hotel, pin);
@@ -457,12 +503,103 @@ function getDuesTracker(hotel, pin) {
   return buildDuesLedger_(tabs, { year: d.getFullYear(), month: d.getMonth() + 1 });
 }
 
+/** One month's tab, rebuilt as a clean 5-tab .xlsx workbook (Rent/Food/Expense/
+ * Recovery detail + a Summary of section totals) for the manager to hand to the
+ * CA. PIN-gated, hotel-scoped. Base64-encodes the file for google.script.run to
+ * return to the browser (Apps Script has no direct binary-download response for
+ * an HtmlService client call); Form.html turns it back into a Blob and triggers
+ * the download. Builds a throwaway Spreadsheet purely as an xlsx-conversion
+ * vehicle and trashes it in a finally, so an export never leaves an orphan file
+ * in the owner's Drive even if the conversion step itself throws. Conversion
+ * goes through the Sheets export URL via UrlFetchApp + the script's own OAuth
+ * token, NOT DriveApp.getAs(MimeType.MICROSOFT_EXCEL) — that throws
+ * "Converting from application/vnd.google-apps.spreadsheet ... is not
+ * supported" for native Sheets files; getAs() only handles a fixed set of
+ * built-in conversions (PDF etc.), not xlsx. */
+function exportMonthWorkbook(hotel, pin, ym) {
+  verifyPin_(hotel, pin);
+  var p = ymParts_(ym);
+  var ss = SpreadsheetApp.openById(hotelCfg_(hotel).id);
+  var sheet = findMonthSheet_(ss, p.year, p.month);
+  if (!sheet) throw new Error('No data found for ' + ym + '.');
+  var values = sheet.getDataRange().getValues();
+  var parsed = parseTab_(values, p.year, p.month);
+
+  function findSec(type) {
+    for (var i = 0; i < parsed.sections.length; i++) {
+      if (parsed.sections[i].type === type) return parsed.sections[i];
+    }
+    return null;
+  }
+
+  var tmp = SpreadsheetApp.create('CA export - ' + hotel + ' ' + ym + ' - ' + new Date().getTime());
+  try {
+    var sheetsByName = { Rent: tmp.getSheets()[0].setName('Rent') };
+    ['Food', 'Expense', 'Recovery', 'Summary'].forEach(function (name) {
+      sheetsByName[name] = tmp.insertSheet(name);
+    });
+
+    var byName = { Rent: 'rent', Food: 'food', Expense: 'expense', Recovery: 'recovery' };
+    var recoveryRows = null, recoveryFields = null;
+    Object.keys(byName).forEach(function (name) {
+      var section = byName[name];
+      var headers = canonicalLayout_(section).slice(0, -1); // drop trailing _entryId
+      var rows = buildExportRows_(values, section, p.year, p.month);
+      if (section === 'recovery') { recoveryRows = rows; recoveryFields = entryWriteFields_(section); }
+      var data = [headers].concat(rows.map(function (r) { return [r.date].concat(r.cells); }));
+      sheetsByName[name].getRange(1, 1, data.length, headers.length).setValues(data);
+    });
+
+    var recCashIdx = recoveryFields.indexOf('cash'), recBankIdx = recoveryFields.indexOf('bank'),
+        recAmtIdx = recoveryFields.indexOf('amount');
+    var recCash = 0, recBank = 0, recTotal = 0;
+    recoveryRows.forEach(function (r) {
+      recCash += num_(r.cells[recCashIdx]) || 0;
+      recBank += num_(r.cells[recBankIdx]) || 0;
+      recTotal += num_(r.cells[recAmtIdx]) || 0;
+    });
+
+    var summaryHeader = ['Section', 'Rows', 'Total', 'Cash', 'Bank', 'GST', 'Due', 'Discount', 'Dream Food Amount'];
+    var summaryRows = [summaryHeader];
+    ['rent', 'food', 'expense'].forEach(function (type) {
+      var s = findSec(type);
+      summaryRows.push([type.charAt(0).toUpperCase() + type.slice(1),
+        s ? s.rows : 0, s ? s.total : 0, s ? s.cash : 0, s ? s.bank : 0,
+        s ? s.gst : 0, s ? s.due : 0, s ? s.discount : 0, s ? s.dreamFoodAmount : 0]);
+    });
+    summaryRows.push(['Recovery', recoveryRows.length, recTotal, recCash, recBank, '', '', '', '']);
+    sheetsByName.Summary.getRange(1, 1, summaryRows.length, summaryHeader.length).setValues(summaryRows);
+
+    SpreadsheetApp.flush();
+    var exportUrl = 'https://docs.google.com/spreadsheets/d/' + tmp.getId() + '/export?format=xlsx';
+    var resp = UrlFetchApp.fetch(exportUrl, {
+      headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() },
+      muteHttpExceptions: true
+    });
+    if (resp.getResponseCode() !== 200) {
+      throw new Error('xlsx export failed (HTTP ' + resp.getResponseCode() + ').');
+    }
+    var blob = resp.getBlob();
+    var monthLabel = MONTH_NAMES_[p.month - 1];
+    monthLabel = monthLabel.charAt(0) + monthLabel.slice(1).toLowerCase();
+    return {
+      filename: hotel + '_' + monthLabel + '_' + p.year + '.xlsx',
+      base64: Utilities.base64Encode(blob.getBytes()),
+      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    };
+  } finally {
+    DriveApp.getFileById(tmp.getId()).setTrashed(true);
+  }
+}
+
 // Node-harness export (ignored inside GAS, where `module` is undefined).
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     sumSectionByDay_: sumSectionByDay_, buildDailyReport_: buildDailyReport_,
     partyOf_: partyOf_, buildDueIndex_: buildDueIndex_, findDueById_: findDueById_,
     recoveredAgainstDue_: recoveredAgainstDue_, canDeleteDue_: canDeleteDue_,
-    canRecoverAmount_: canRecoverAmount_, buildDuesLedger_: buildDuesLedger_
+    canRecoverAmount_: canRecoverAmount_, buildDuesLedger_: buildDuesLedger_,
+    buildExportRows_: buildExportRows_, findMonthSheet_: findMonthSheet_,
+    exportMonthWorkbook: exportMonthWorkbook
   };
 }

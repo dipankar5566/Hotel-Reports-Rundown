@@ -353,9 +353,13 @@ function wireMoneyCheck() {
   var ids = ['f_amount', 'f_cash', 'f_bank'].concat((sec === 'rent' || sec === 'food') ? ['f_due', 'f_discount'] : []);
   ids.forEach(function (id) {
     var el = $(id);
-    if (el) el.oninput = updateMoneyHint;
+    if (!el) return;
+    el.oninput = (sec === 'recovery' && id === 'f_amount')
+      ? function () { updateMoneyHint(); updateDueRemainHint(); }
+      : updateMoneyHint;
   });
   updateMoneyHint();
+  if (sec === 'recovery') updateDueRemainHint();
 }
 
 function updateMoneyHint() {
@@ -392,7 +396,8 @@ function buildDuePicker() {
   search.placeholder = 'Search open dues…';
   var results = document.createElement('div'); results.id = 'dueResults';
   var linked = document.createElement('div'); linked.id = 'dueLinked'; linked.className = 'hidden';
-  wrap.appendChild(lab); wrap.appendChild(search); wrap.appendChild(results); wrap.appendChild(linked);
+  var remain = document.createElement('div'); remain.id = 'dueRemainHint'; remain.className = 'muted hidden';
+  wrap.appendChild(lab); wrap.appendChild(search); wrap.appendChild(results); wrap.appendChild(linked); wrap.appendChild(remain);
   box.insertBefore(wrap, box.firstChild);
   search.oninput = function () { renderDueResults(search.value); };
   var existingRef = $('f_dueRef').value;
@@ -440,6 +445,31 @@ function pickDue(d) {
   if (!$('f_amount').value) $('f_amount').value = d.outstanding;
   $('dueSearch').value = '';
   showLinkedBanner(d.party, d.room, d.outstanding);
+  updateDueRemainHint();
+}
+
+// Live "how much will still be owed after this recovery" feedback — the
+// picker auto-fills the full outstanding on pick (above), so this is what
+// makes editing that number down to a partial payment visible/trustworthy
+// instead of a silent, unconfirmed edit.
+function updateDueRemainHint() {
+  var hint = $('dueRemainHint'); if (!hint) return;
+  var ref = $('f_dueRef') ? $('f_dueRef').value : '';
+  if (!ref) { hint.classList.add('hidden'); return; }
+  var list = (DASH.dues && DASH.dues.openDues) || [];
+  var d = null;
+  for (var i = 0; i < list.length; i++) { if (list[i].dueId === ref) { d = list[i]; break; } }
+  if (!d) { hint.classList.add('hidden'); return; }
+  var amt = Number($('f_amount').value) || 0;
+  var remaining = d.outstanding - amt;
+  hint.classList.remove('hidden');
+  if (remaining < -0.01) {
+    hint.style.color = 'var(--danger)';
+    hint.textContent = 'Exceeds outstanding by Rs ' + fmt(-remaining) + ' — max Rs ' + fmt(d.outstanding);
+  } else {
+    hint.style.color = '';
+    hint.textContent = 'Remaining due after this: Rs ' + fmt(remaining);
+  }
 }
 
 function showLinkedBanner(party, room, outstanding) {
@@ -457,6 +487,7 @@ function clearDueLink() {
   var linked = $('dueLinked');
   linked.classList.add('hidden'); linked.innerHTML = '';
   renderDueResults('');
+  updateDueRemainHint();
 }
 
 function updateSaveLabel() {

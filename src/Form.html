@@ -62,6 +62,7 @@
   #dueResults .party { padding:8px 0; }
   #dueLinked { padding:8px 0; font-size:13px; color:var(--muted); }
   #dueLinked a { color:var(--teal); font-weight:600; }
+  .entry.low { background:#fef2f2; margin:0 -16px; padding:10px 16px; }
 </style>
 
 <div class="wrap">
@@ -87,6 +88,7 @@
   <div id="app" class="hidden">
     <div class="chips" id="navChips">
       <div class="chip on" id="navEntry">Entry</div>
+      <div class="chip" id="navInv">Inventory</div>
       <div class="chip" id="navDash">Dashboard</div>
     </div>
 
@@ -113,6 +115,39 @@
         <label>View month</label>
         <select id="listMonth"></select>
         <div id="entries"><p class="muted">—</p></div>
+      </div>
+    </div>
+
+    <!-- === INVENTORY view === -->
+    <div id="invView" class="hidden">
+      <div class="card">
+        <div class="chips" id="invTypeChips"></div>
+        <label>Date</label>
+        <input id="invDate" type="date">
+        <div id="invFields"></div>
+        <div style="height:16px"></div>
+        <button class="primary" id="invSaveBtn">Save transaction</button>
+      </div>
+
+      <div class="card">
+        <strong>Current stock</strong>
+        <input id="invStockSearch" type="text" placeholder="Search items…" style="margin:8px 0">
+        <div id="invStockList"><p class="muted">—</p></div>
+      </div>
+
+      <div class="card">
+        <strong>Closing Stock Statement</strong>
+        <div id="closeStatus" class="muted" style="margin:8px 0">—</div>
+        <button class="primary" id="closeSubmitBtn">Submit closing stock</button>
+        <label>Date</label>
+        <input id="closeDate" type="date">
+        <button class="mini ed" id="closePdfBtn" style="margin-top:8px">Download PDF</button>
+        <p class="muted" id="closePdfStatus"></p>
+      </div>
+
+      <div class="card">
+        <strong>Transaction history</strong>
+        <div id="invLog"><p class="muted">—</p></div>
       </div>
     </div>
 
@@ -157,6 +192,12 @@
 })();
 
 var STATE = { hotel: null, pin: null, config: null, staffName: null, section: 'rent', editingId: null, editOrigYm: null };
+
+// ---- inventory state (separate from STATE.section's rent/food/expense/recovery
+// forms — different shape: no money fields, item picker instead of a fixed
+// dropdown, and a live per-hotel stock snapshot rather than a per-month list) ----
+var INV_CONFIG = null;
+var INV = { type: 'Purchase', stockSearch: '' };
 
 // Field definitions per section. type: text|number|select. req = required.
 var FIELD_DEFS = {
@@ -247,10 +288,12 @@ $('unlockBtn').onclick = function () {
       $('pinScreen').classList.add('hidden');
       $('app').classList.remove('hidden');
       $('entryDate').value = todayIso();
+      $('invDate').value = todayIso();
       buildMonthList();
       selectSection('rent');
       loadEntries();
       loadDues(); // primes the recovery party datalist + caches the tracker
+      loadInventoryConfig();
     })
     .withFailureHandler(function (err) {
       $('unlockBtn').disabled = false;
@@ -650,6 +693,8 @@ function doDelete(e) {
 $('lockBtn').onclick = function () {
   STATE = { hotel: null, pin: null, config: null, staffName: null, section: 'rent', editingId: null, editOrigYm: null };
   DASH = { scope: 'lifetime', dues: null, repLoaded: false };
+  INV_CONFIG = null;
+  INV = { type: 'Purchase', stockSearch: '' };
   showView('entry');
   $('app').classList.add('hidden');
   $('pinScreen').classList.remove('hidden');
@@ -657,16 +702,18 @@ $('lockBtn').onclick = function () {
   $('staffName').value = ''; // a shared device shouldn't default to whoever unlocked it last
 };
 
-// ---- top nav: Entry / Dashboard ----
+// ---- top nav: Entry / Inventory / Dashboard ----
 function showView(which) {
-  var entry = which === 'entry';
-  $('entryView').classList.toggle('hidden', !entry);
-  $('dashView').classList.toggle('hidden', entry);
-  $('navEntry').classList.toggle('on', entry);
-  $('navDash').classList.toggle('on', !entry);
-  if (!entry) openDashboard();
+  $('entryView').classList.toggle('hidden', which !== 'entry');
+  $('invView').classList.toggle('hidden', which !== 'inv');
+  $('dashView').classList.toggle('hidden', which !== 'dash');
+  $('navEntry').classList.toggle('on', which === 'entry');
+  $('navInv').classList.toggle('on', which === 'inv');
+  $('navDash').classList.toggle('on', which === 'dash');
+  if (which === 'dash') openDashboard();
 }
 $('navEntry').onclick = function () { showView('entry'); };
+$('navInv').onclick = function () { showView('inv'); };
 $('navDash').onclick = function () { showView('dash'); };
 
 // ---- dashboard state ----
@@ -823,4 +870,307 @@ function renderDues() {
 
 function fmt(n) { n = Number(n) || 0; return n.toLocaleString('en-IN'); }
 function escapeHtml(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+
+// ---- inventory: purchase / usage / recount ----
+
+function loadInventoryConfig() {
+  google.script.run
+    .withSuccessHandler(function (cfg) {
+      INV_CONFIG = cfg;
+      // Wrapped: an exception anywhere in here used to silently stop this
+      // callback partway through, leaving the item dropdown/stock list empty
+      // with zero indication anything went wrong. Now it's a visible toast.
+      try {
+        buildInvTypeChips();
+        buildInvFields();
+        renderStockList();
+      } catch (e) {
+        toast('Inventory UI error: ' + (e && e.message ? e.message : e), true);
+      }
+      loadInventoryLog();
+      $('closeDate').value = todayIso();
+      loadClosingStockStatus();
+    })
+    .withFailureHandler(function (err) { toast(errText(err), true); })
+    .getInventoryConfig(STATE.hotel, STATE.pin);
+}
+
+function buildInvTypeChips() {
+  var box = $('invTypeChips'); box.innerHTML = '';
+  var types = (INV_CONFIG && INV_CONFIG.types) || ['Purchase', 'Usage', 'Recount'];
+  types.forEach(function (t) {
+    var b = document.createElement('div');
+    b.className = 'chip' + (t === INV.type ? ' on' : '');
+    b.textContent = t;
+    b.onclick = function () { INV.type = t; buildInvTypeChips(); buildInvFields(); };
+    box.appendChild(b);
+  });
+}
+
+function findStockItem(name) {
+  var list = (INV_CONFIG && INV_CONFIG.stock) || [];
+  for (var i = 0; i < list.length; i++) { if (list[i].item === name) return list[i]; }
+  return null;
+}
+
+function buildInvFields() {
+  var box = $('invFields'); box.innerHTML = '';
+
+  var qtyLabel = INV.type === 'Recount' ? 'Counted quantity (total on hand)' : 'Quantity';
+  var qlab = document.createElement('label'); qlab.textContent = qtyLabel + ' *';
+  box.appendChild(qlab);
+  var qty = document.createElement('input');
+  qty.type = 'number'; qty.id = 'f_inv_qty'; qty.inputMode = 'decimal'; qty.min = '0';
+  box.appendChild(qty);
+
+  if (INV.type === 'Recount') {
+    var hint = document.createElement('p'); hint.id = 'recountHint'; hint.className = 'muted hidden';
+    box.appendChild(hint);
+    qty.oninput = updateRecountHint;
+  }
+
+  if (INV.type === 'Usage') {
+    var rlab = document.createElement('label'); rlab.textContent = 'Reason *';
+    box.appendChild(rlab);
+    var rsel = document.createElement('select'); rsel.id = 'f_inv_reason';
+    (INV_CONFIG && INV_CONFIG.reasons || ['Used', 'Damaged', 'Lost', 'Given away', 'Other']).forEach(function (r) {
+      var o = document.createElement('option'); o.value = r; o.textContent = r; rsel.appendChild(o);
+    });
+    box.appendChild(rsel);
+  }
+
+  var remLabel = 'Remark' + (INV.type === 'Usage' ? ' (required if reason is Other)' : ' (optional)');
+  var remlab = document.createElement('label'); remlab.textContent = remLabel;
+  box.appendChild(remlab);
+  var rem = document.createElement('input'); rem.type = 'text'; rem.id = 'f_inv_remark';
+  box.appendChild(rem);
+
+  buildItemSelect(); // prepended to the top of #invFields
+}
+
+// Plain native <select> grouped by category — staff use Android, where a
+// native select renders as a normal scrollable list (no iOS wheel-scroll
+// penalty), and matches the Room/Category dropdowns used everywhere else in
+// this app. Replaces an earlier search-box-then-tap picker that staff
+// reported they couldn't find/use — its renderItemResults only showed the
+// first 25 items until you typed a matching search term, so most of the
+// catalog was effectively invisible.
+function buildItemSelect() {
+  var box = $('invFields');
+  var lab = document.createElement('label'); lab.textContent = 'Item *';
+  var sel = document.createElement('select'); sel.id = 'f_inv_item';
+  var blank = document.createElement('option');
+  blank.value = ''; blank.disabled = true; blank.selected = true; blank.textContent = 'Select an item…';
+  sel.appendChild(blank);
+  // Built from INV_CONFIG.stock (not the separate .items field) — stock
+  // already carries {item, category, currentStock, low} for every catalog
+  // entry, so this is one data source instead of two, and orphaned (retired)
+  // entries are naturally excluded since they're not valid Purchase/Usage
+  // targets anyway.
+  var stock = ((INV_CONFIG && INV_CONFIG.stock) || []).filter(function (s) { return !s.orphaned; });
+  var categories = (INV_CONFIG && INV_CONFIG.categories) || [];
+  var count = 0;
+  categories.forEach(function (cat) {
+    var inCat = stock.filter(function (s) { return s.category === cat; });
+    if (!inCat.length) return;
+    var grp = document.createElement('optgroup'); grp.label = cat;
+    inCat.forEach(function (s) {
+      var o = document.createElement('option');
+      o.value = s.item;
+      o.textContent = s.item + ' — stock: ' + s.currentStock + (s.low ? ' (LOW)' : '');
+      grp.appendChild(o);
+      count++;
+    });
+    sel.appendChild(grp);
+  });
+  if (!count) {
+    var warn = document.createElement('option');
+    warn.value = ''; warn.disabled = true;
+    warn.textContent = 'No items loaded — try reloading the page';
+    sel.appendChild(warn);
+  }
+  sel.onchange = function () { if (INV.type === 'Recount') updateRecountHint(); };
+  box.insertBefore(sel, box.firstChild);
+  box.insertBefore(lab, sel);
+}
+
+// Live "system shows N — this will log a delta of ±M" feedback, mirrors
+// updateDueRemainHint's live-diff pattern.
+function updateRecountHint() {
+  var hint = $('recountHint'); if (!hint) return;
+  var itemName = $('f_inv_item') ? $('f_inv_item').value : '';
+  var it = itemName ? findStockItem(itemName) : null;
+  var counted = Number($('f_inv_qty').value);
+  if (!it || $('f_inv_qty').value === '' || isNaN(counted)) { hint.classList.add('hidden'); return; }
+  var delta = counted - it.currentStock;
+  hint.classList.remove('hidden');
+  hint.textContent = 'System shows ' + it.currentStock + ' — this will log a delta of ' +
+    (delta >= 0 ? '+' : '') + delta + '.';
+}
+
+$('invSaveBtn').onclick = function () {
+  var itemName = $('f_inv_item').value;
+  if (!itemName) { toast('Pick an item.', true); return; }
+  var dateStr = $('invDate').value;
+  if (!dateStr) { toast('Pick a date.', true); return; }
+  var qtyVal = Number($('f_inv_qty').value);
+  if ($('f_inv_qty').value === '' || isNaN(qtyVal) || qtyVal < 0) { toast('Enter a quantity.', true); return; }
+  if (INV.type !== 'Recount' && !(qtyVal > 0)) { toast('Quantity must be greater than 0.', true); return; }
+  var reason = INV.type === 'Usage' ? ($('f_inv_reason') ? $('f_inv_reason').value : '') : '';
+  var remark = ($('f_inv_remark') && $('f_inv_remark').value || '').trim();
+  if (INV.type === 'Usage' && reason === 'Other' && !remark) {
+    toast('Add a Remark describing the usage — "Other" needs a reason so it isn\'t untraceable later.', true);
+    return;
+  }
+  var parts = dateStr.split('-');
+  var payload = {
+    hotel: STATE.hotel, pin: STATE.pin, item: itemName, type: INV.type,
+    qty: qtyVal, reason: reason, remark: remark, enteredBy: STATE.staffName,
+    date: { year: Number(parts[0]), month: Number(parts[1]), day: Number(parts[2]) }
+  };
+  $('invSaveBtn').disabled = true;
+  google.script.run
+    .withSuccessHandler(function (res) {
+      $('invSaveBtn').disabled = false;
+      toast('Saved — new stock: ' + res.resultingStock + '.');
+      buildInvFields(); // clear item/qty/reason/remark for the next transaction
+      refreshInventoryStock();
+      loadInventoryLog();
+    })
+    .withFailureHandler(function (err) {
+      $('invSaveBtn').disabled = false;
+      toast(errText(err), true);
+    })
+    .submitInventoryTxn(payload);
+};
+
+function refreshInventoryStock() {
+  google.script.run
+    .withSuccessHandler(function (stock) { if (INV_CONFIG) INV_CONFIG.stock = stock; renderStockList(); })
+    .withFailureHandler(function (err) { toast(errText(err), true); })
+    .getInventoryStock(STATE.hotel, STATE.pin);
+}
+
+$('invStockSearch').oninput = function () { INV.stockSearch = this.value; renderStockList(); };
+
+function renderStockList() {
+  var box = $('invStockList');
+  var list = (INV_CONFIG && INV_CONFIG.stock) || [];
+  var q = (INV.stockSearch || '').trim().toLowerCase();
+  var filtered = q ? list.filter(function (it) { return it.item.toLowerCase().indexOf(q) !== -1; }) : list;
+  if (!filtered.length) { box.innerHTML = '<p class="muted">No items.</p>'; return; }
+  var byCat = {};
+  filtered.forEach(function (it) { (byCat[it.category] = byCat[it.category] || []).push(it); });
+  var html = '';
+  Object.keys(byCat).sort().forEach(function (cat) {
+    var items = byCat[cat].slice().sort(function (a, b) {
+      if (a.low !== b.low) return a.low ? -1 : 1; // low items first within each category
+      return a.item < b.item ? -1 : (a.item > b.item ? 1 : 0);
+    });
+    html += '<div class="muted" style="margin-top:10px;font-weight:600">' + escapeHtml(cat) + '</div>';
+    items.forEach(function (it) {
+      html += '<div class="entry' + (it.low ? ' low' : '') + '"><span class="grow">' + escapeHtml(it.item) +
+        (it.orphaned ? ' <span class="muted">(retired)</span>' : '') + '</span><span class="amt">' +
+        it.currentStock + ' <span class="muted">/ min ' + it.minStock + '</span></span></div>';
+    });
+  });
+  box.innerHTML = html;
+}
+
+function loadInventoryLog() {
+  google.script.run
+    .withSuccessHandler(renderInvLog)
+    .withFailureHandler(function (err) { $('invLog').innerHTML = '<p class="muted">' + errText(err) + '</p>'; })
+    .listInventoryLog(STATE.hotel, STATE.pin);
+}
+
+function renderInvLog(list) {
+  var box = $('invLog');
+  if (!list || !list.length) { box.innerHTML = '<p class="muted">No transactions yet.</p>'; return; }
+  box.innerHTML = '';
+  // Cap rendered rows for phone usability — the log itself is unbounded.
+  list.slice(0, 100).forEach(function (e) {
+    var row = document.createElement('div'); row.className = 'entry';
+    var grow = document.createElement('div'); grow.className = 'grow';
+    grow.innerHTML = '<span class="sec">' + e.type + '</span><br>' + escapeHtml(e.item) +
+      (e.reason ? ' · ' + escapeHtml(e.reason) : '') +
+      (e.remark ? ' <span class="muted">· ' + escapeHtml(e.remark) + '</span>' : '') +
+      ' <span class="muted">· ' + escapeHtml(e.date) + (e.enteredBy ? ' · ' + escapeHtml(e.enteredBy) : '') + '</span>';
+    var amt = document.createElement('span'); amt.className = 'amt';
+    amt.textContent = (e.qty >= 0 ? '+' : '') + e.qty;
+    var del = document.createElement('button'); del.className = 'mini del'; del.textContent = 'Delete';
+    del.onclick = function () { doDeleteInv(e); };
+    row.appendChild(grow); row.appendChild(amt); row.appendChild(del);
+    box.appendChild(row);
+  });
+}
+
+function doDeleteInv(e) {
+  if (!window.confirm('Delete this ' + e.type + ' on ' + e.item + ' (' + (e.qty >= 0 ? '+' : '') + e.qty + ')?')) return;
+  google.script.run
+    .withSuccessHandler(function () { toast('Deleted.'); refreshInventoryStock(); loadInventoryLog(); })
+    .withFailureHandler(function (err) { toast(errText(err), true); })
+    .deleteInventoryTxn(STATE.hotel, STATE.pin, e.entryId);
+}
+
+// ---- closing stock statement ----
+
+function loadClosingStockStatus() {
+  google.script.run
+    .withSuccessHandler(function (list) {
+      var box = $('closeStatus');
+      if (!list || !list.length) { box.textContent = 'Not yet submitted.'; return; }
+      var last = list[0];
+      var when = last.date === todayIso() ? 'today' : last.date;
+      var t = new Date(last.submittedAt);
+      var hh = t.getHours(), mm = t.getMinutes();
+      var stamp = (hh < 10 ? '0' : '') + hh + ':' + (mm < 10 ? '0' : '') + mm;
+      box.textContent = 'Last submitted ' + when + ' at ' + stamp +
+        (last.submittedBy ? ' by ' + last.submittedBy : '') + ' (' + last.itemCount + ' items).';
+    })
+    .withFailureHandler(function (err) { $('closeStatus').textContent = errText(err); })
+    .listClosingStockSubmissions(STATE.hotel, STATE.pin);
+}
+
+$('closeSubmitBtn').onclick = function () {
+  $('closeSubmitBtn').disabled = true;
+  google.script.run
+    .withSuccessHandler(function (res) {
+      $('closeSubmitBtn').disabled = false;
+      toast('Closing stock submitted (' + res.itemCount + ' items).');
+      loadClosingStockStatus();
+    })
+    .withFailureHandler(function (err) {
+      $('closeSubmitBtn').disabled = false;
+      toast(errText(err), true);
+    })
+    .submitClosingStock(STATE.hotel, STATE.pin, STATE.staffName);
+};
+
+$('closePdfBtn').onclick = function () {
+  var dateKey = $('closeDate').value;
+  if (!dateKey) { toast('Pick a date.', true); return; }
+  var btn = $('closePdfBtn');
+  btn.disabled = true;
+  $('closePdfStatus').textContent = 'Preparing file...';
+  google.script.run
+    .withSuccessHandler(function (res) {
+      var bytes = atob(res.base64);
+      var arr = new Uint8Array(bytes.length);
+      for (var i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+      var blob = new Blob([arr], { type: res.mimeType });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url; a.download = res.filename;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      btn.disabled = false;
+      $('closePdfStatus').textContent = '';
+    })
+    .withFailureHandler(function (err) {
+      btn.disabled = false;
+      $('closePdfStatus').textContent = errText(err);
+    })
+    .generateClosingStockPdf(STATE.hotel, STATE.pin, dateKey);
+};
 </script>

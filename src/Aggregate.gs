@@ -3,7 +3,7 @@
  * with gzip'd CacheService caching (payload exceeds the 100KB plain limit).
  */
 
-var CACHE_KEY = 'dash_v17'; // v17: new entry.dreamFoodAmount (Paradise-only, pass-through — food Paradise recorded that actually came from Dream's kitchen; never netted into revenue/net); days[d] gains a dreamFoodAmount field
+var CACHE_KEY = 'dash_v18'; // v18: new top-level payload.inventory {hotel: {totalItems, lowStockCount, lowStockItems}} — live per-hotel low-stock snapshot from each book's "Inventory Items" tab (Inventory.gs); NOT month-scoped, doesn't touch months[]/entry shape at all
 var CACHE_SECS = 600; // 10 min
 
 function getDashboardData(forceRefresh) {
@@ -37,7 +37,12 @@ function buildPayload_() {
       books.push({
         hotel: h.hotel,
         tabs: ss.getSheets().map(function (sheet) {
-          return { name: sheet.getName(), values: sheet.getDataRange().getValues() };
+          var name = sheet.getName();
+          // Inventory Log is append-only and unbounded (unlike month tabs);
+          // nothing in buildPayloadFromBooks_ reads its content, so skip the
+          // fetch entirely rather than paying for it on every dashboard load.
+          var values = (name === INVENTORY_LOG_TAB_ || name === CLOSING_STOCK_TAB_) ? [] : sheet.getDataRange().getValues();
+          return { name: name, values: values };
         })
       });
     } catch (e) {
@@ -50,6 +55,7 @@ function buildPayload_() {
 /** Pure aggregation over pre-fetched tab values (unit-testable outside GAS). */
 function buildPayloadFromBooks_(books, errors) {
   var months = []; // one entry per hotel-month
+  var inventory = {}; // NEW — top-level, per-hotel, NOT month-scoped
   errors = errors || [];
   var now = new Date();
   books.forEach(function (h) {
@@ -57,6 +63,19 @@ function buildPayloadFromBooks_(books, errors) {
     for (var i = 0; i < HOTELS.length; i++) {
       if (HOTELS[i].hotel === h.hotel) hotelCfg = HOTELS[i];
     }
+    var invTab = null;
+    for (var t = 0; t < h.tabs.length; t++) {
+      if (h.tabs[t].name === INVENTORY_ITEMS_TAB_) { invTab = h.tabs[t]; break; }
+    }
+    var stock = buildInventoryStockView_(invTab ? invTab.values : [INVENTORY_ITEMS_HEADER_], h.hotel);
+    var low = stock.filter(function (s) { return s.low; });
+    inventory[h.hotel] = {
+      totalItems: stock.length,
+      lowStockCount: low.length,
+      lowStockItems: low.map(function (s) {
+        return { item: s.item, category: s.category, currentStock: s.currentStock, minStock: s.minStock };
+      })
+    };
     h.tabs.forEach(function (sheet) {
       var ym = tabMonth(sheet.name);
       if (!ym) return; // not a monthly tab
@@ -193,6 +212,7 @@ function buildPayloadFromBooks_(books, errors) {
     generatedAt: new Date().toISOString(),
     hotels: HOTELS.map(function (h) { return h.hotel; }),
     months: months,
+    inventory: inventory,
     errors: errors
   };
 }

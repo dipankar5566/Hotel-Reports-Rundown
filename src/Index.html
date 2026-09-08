@@ -202,6 +202,13 @@
     </div>
 
     <div class="panel">
+      <h2>Inventory — low stock</h2>
+      <div id="invStats"></div>
+      <div id="invList"></div>
+      <div class="note">Live per-hotel stock count (linens, supplies, amenities, small appliances) from the staff PWA's Inventory tab — not month-scoped. A never-stocked item shows as low until staff record real stock.</div>
+    </div>
+
+    <div class="panel">
       <h2>Year-over-year revenue</h2>
       <div class="chartbox" style="height:240px"><canvas id="cYoY"></canvas></div>
     </div>
@@ -420,6 +427,7 @@ function render() {
   drawMix(cur);
   drawMoney(cur);
   drawFood(cur);
+  drawInventory();
   drawRemarks(cur);
   drawYoY(months);
   drawTable();
@@ -493,6 +501,41 @@ function drawMoney(cur) {
     ['Discounts given', inr(cur.discountTotal)],
     ['Owner savings set aside', inr(cur.expByCat['Owner Savings (7%)'] || 0)]
   ]);
+}
+
+// Live per-hotel low-stock snapshot (payload.inventory) — NOT month-scoped,
+// reads `scope` directly instead of `cur`/`selYM`.
+function drawInventory() {
+  var inv = (DATA && DATA.inventory) || {};
+  var hotels = scope === 'Both' ? Object.keys(inv) : [scope];
+  var rows = [], items = [];
+  hotels.forEach(function (h) {
+    var d = inv[h];
+    if (!d) return;
+    rows.push([h + ' — items tracked', d.totalItems]);
+    rows.push([h + ' — low on stock', d.lowStockCount]);
+    d.lowStockItems.forEach(function (it) {
+      items.push({ hotel: h, item: it.item, category: it.category, currentStock: it.currentStock, minStock: it.minStock });
+    });
+  });
+  statRows('invStats', rows.length ? rows : [['No inventory data yet', '—']]);
+  var box = document.getElementById('invList');
+  if (!items.length) {
+    box.innerHTML = '<p class="muted">No low-stock items.</p>';
+    return;
+  }
+  var byCat = {};
+  items.forEach(function (it) {
+    byCat[it.category] = byCat[it.category] || [];
+    byCat[it.category].push(it);
+  });
+  box.innerHTML = Object.keys(byCat).sort().map(function (cat) {
+    var lines = byCat[cat].map(function (it) {
+      return '<li>' + (scope === 'Both' ? '<strong>' + escapeHtml(it.hotel) + '</strong> — ' : '') +
+        escapeHtml(it.item) + ': ' + it.currentStock + ' (min ' + it.minStock + ')</li>';
+    }).join('');
+    return '<div style="margin-top:8px"><strong>' + escapeHtml(cat) + '</strong><ul style="margin:4px 0 0 18px;padding:0">' + lines + '</ul></div>';
+  }).join('');
 }
 
 var FOOD_COST_CATS = ['Kitchen & Groceries', 'Outside Food', 'LPG / Gas', 'Water & Dairy'];

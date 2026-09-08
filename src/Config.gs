@@ -105,6 +105,161 @@ function isKnownCategory_(text) {
   return false;
 }
 
+// Shared inventory item catalog. Dream and Paradise stock the same items;
+// each hotel's OWN "Inventory Items" tab holds that hotel's stock number —
+// this array is only ever the fixed set of valid NAMES + metadata, same
+// role CATEGORY_RULES plays for expense categories. Owner adds/renames
+// items HERE (a code change), same workflow as ROOMS_BY_HOTEL.
+// `hotelOnly` (optional) hides the item from the other hotel's picker —
+// same mechanism Form.html already uses for Paradise's Dream Food Amount.
+// Seeded Sep 2026 from Paradise's informal tracking sheet; both hotels
+// start every item at 0 stock (owner declined to import old counts).
+// A few names are best-guess typo cleanups needing an owner glance before
+// go-live: 'Plastic Stool' (was "PLASTIC TOOL"), 'Staplex' (kept verbatim,
+// likely staple pins), 'Gripper' (was "GRIPER", meaning unclear), 'Catcher'
+// (kept verbatim, meaning unclear), 'Collin' (kept verbatim - maybe
+// cologne/spray), 'Soap Dispenser' (was "SHOP DISPENSER", guessed typo).
+var INVENTORY_ITEMS = [
+  { name: 'Big Towel', category: 'Housekeeping' },
+  { name: 'Hand Towel', category: 'Housekeeping' },
+  { name: 'Bed Cover', category: 'Housekeeping' },
+  { name: 'Pillow Cover', category: 'Housekeeping' },
+  { name: 'Pillow', category: 'Housekeeping' },
+  { name: 'Cushion Pillow', category: 'Housekeeping' },
+  { name: 'Blanket', category: 'Housekeeping' },
+  { name: 'Blanket Cover', category: 'Housekeeping' },
+  { name: 'Bathroom Mat', category: 'Housekeeping' },
+  { name: 'Carpet', category: 'Housekeeping' },
+  { name: 'Toilet Mug', category: 'Housekeeping' },
+  { name: 'Bathroom Bucket', category: 'Housekeeping' },
+  { name: 'Toilet Folding Brush', category: 'Housekeeping' },
+  { name: 'Toilet Cleaning Gloves', category: 'Housekeeping' },
+  { name: 'Soap Dispenser', category: 'Housekeeping' },
+  { name: 'Jharu', category: 'Housekeeping' },
+  { name: 'Swing Broom', category: 'Housekeeping' },
+  { name: 'Mop', category: 'Housekeeping' },
+  { name: 'Belcha', category: 'Housekeeping' },
+  { name: 'Dustbin', category: 'Housekeeping' },
+  { name: 'Garbage Bag', category: 'Housekeeping' },
+  { name: 'Duster', category: 'Housekeeping' },
+  { name: 'Laundry Basket', category: 'Housekeeping' },
+  { name: 'Room Freshener (SPR)', category: 'Housekeeping' },
+  { name: 'Air Revitalizer', category: 'Housekeeping' },
+  { name: 'Godrej Aer Pocket', category: 'Housekeeping' },
+  { name: 'All Out Machine', category: 'Housekeeping' },
+  { name: 'All Out Refill', category: 'Housekeeping' },
+  { name: 'Harpic', category: 'Housekeeping' },
+  { name: 'Phenyl', category: 'Housekeeping' },
+  { name: 'Clinar', category: 'Housekeeping' },
+  { name: 'Shampoo', category: 'Housekeeping' },
+  { name: 'Soap', category: 'Housekeeping' },
+  { name: 'Hand Wash', category: 'Housekeeping' },
+  { name: 'Toothpaste', category: 'Housekeeping' },
+  { name: 'Toothbrush', category: 'Housekeeping' },
+  { name: 'Comb', category: 'Housekeeping' },
+  { name: 'Collin', category: 'Housekeeping' },
+  { name: 'Tissue', category: 'Housekeeping' },
+  { name: 'Tissue Stand', category: 'Housekeeping' },
+  { name: 'Ashtray', category: 'Housekeeping' },
+  { name: 'Umbrella', category: 'Housekeeping' },
+  { name: 'Agarbati Stand', category: 'Housekeeping' },
+  { name: 'Whisky Glass', category: 'Kitchen & Dining' },
+  { name: 'Water Glass', category: 'Kitchen & Dining' },
+  { name: 'Glass Mug (180ml)', category: 'Kitchen & Dining' },
+  { name: 'Glass Mug (500ml)', category: 'Kitchen & Dining' },
+  { name: 'Water Bottle (500ml)', category: 'Kitchen & Dining' },
+  { name: 'Water Bottle (1L)', category: 'Kitchen & Dining' },
+  { name: 'Plastic Bottle', category: 'Kitchen & Dining' },
+  { name: 'Toothpicks', category: 'Kitchen & Dining' },
+  { name: 'Fork & Spoon', category: 'Kitchen & Dining' },
+  { name: 'Spoon', category: 'Kitchen & Dining' },
+  { name: 'Tea Spoon', category: 'Kitchen & Dining' },
+  { name: 'Tea Plate', category: 'Kitchen & Dining' },
+  { name: 'Dinner Plate', category: 'Kitchen & Dining' },
+  { name: 'Quarter Plates', category: 'Kitchen & Dining' },
+  { name: 'Chinese Bowl', category: 'Kitchen & Dining' },
+  { name: 'Roti Basket', category: 'Kitchen & Dining' },
+  { name: 'Hot Pot', category: 'Kitchen & Dining' },
+  { name: 'Salt Pot', category: 'Kitchen & Dining' },
+  { name: 'Service Tray', category: 'Kitchen & Dining' },
+  { name: 'Small Plastic Food Storage Containers', category: 'Kitchen & Dining' },
+  { name: 'Medium Plastic Food Storage Containers', category: 'Kitchen & Dining' },
+  { name: 'Vim Bar Soap', category: 'Kitchen & Dining' },
+  { name: 'Milk Boiler', category: 'Kitchen & Dining' },
+  { name: 'Arch File', category: 'Office & Stationery' },
+  { name: 'Document Folder', category: 'Office & Stationery' },
+  { name: 'Copy Book', category: 'Office & Stationery' },
+  { name: 'Register Book', category: 'Office & Stationery' },
+  { name: 'Room Journal Book', category: 'Office & Stationery' },
+  { name: 'Attendance Register', category: 'Office & Stationery' },
+  { name: 'Cash Book', category: 'Office & Stationery' },
+  { name: 'Advance Book', category: 'Office & Stationery' },
+  { name: 'GST Bill Book', category: 'Office & Stationery' },
+  { name: 'Hotel Booking Form Pad', category: 'Office & Stationery' },
+  { name: 'Carbon Paper', category: 'Office & Stationery' },
+  { name: 'Paid Stamp', category: 'Office & Stationery' },
+  { name: 'Property Stamper', category: 'Office & Stationery', hotelOnly: 'Paradise' },
+  { name: 'Pen Holder', category: 'Office & Stationery' },
+  { name: 'Marker Pen', category: 'Office & Stationery' },
+  { name: 'Correction Pen', category: 'Office & Stationery' },
+  { name: 'Glue Stick', category: 'Office & Stationery' },
+  { name: 'Eraser', category: 'Office & Stationery' },
+  { name: 'Pencil Sharpener', category: 'Office & Stationery' },
+  { name: 'Scissors', category: 'Office & Stationery' },
+  { name: 'Stapler', category: 'Office & Stationery' },
+  { name: 'Staplex', category: 'Office & Stationery' },
+  { name: 'Puncher', category: 'Office & Stationery' },
+  { name: 'Tape', category: 'Office & Stationery' },
+  { name: 'Office Pin', category: 'Office & Stationery' },
+  { name: 'Nickel Plated Round Clips', category: 'Office & Stationery' },
+  { name: 'Steel Clip', category: 'Office & Stationery' },
+  { name: 'Gripper', category: 'Office & Stationery' },
+  { name: 'Catcher', category: 'Office & Stationery' },
+  { name: 'Paper Weight', category: 'Office & Stationery' },
+  { name: 'Steel Scale', category: 'Office & Stationery' },
+  { name: 'Calculator', category: 'Office & Stationery' },
+  { name: 'Wall Mounted Fan', category: 'Electronics & Furniture' },
+  { name: 'Exhaust Fan', category: 'Electronics & Furniture' },
+  { name: 'Tube Light', category: 'Electronics & Furniture' },
+  { name: 'LED Light', category: 'Electronics & Furniture' },
+  { name: '3-Pin Socket', category: 'Electronics & Furniture' },
+  { name: 'T.V.', category: 'Electronics & Furniture' },
+  { name: 'A.C.', category: 'Electronics & Furniture' },
+  { name: 'Cooler', category: 'Electronics & Furniture' },
+  { name: 'Fridge / Freezer', category: 'Electronics & Furniture' },
+  { name: 'Microwave Oven', category: 'Electronics & Furniture' },
+  { name: 'Chair', category: 'Electronics & Furniture' },
+  { name: 'Bed Table', category: 'Electronics & Furniture' },
+  { name: 'Plastic Stool', category: 'Electronics & Furniture' },
+  { name: 'Mattress', category: 'Electronics & Furniture' }
+];
+
+var INVENTORY_CATEGORIES = ['Housekeeping', 'Kitchen & Dining', 'Office & Stationery', 'Electronics & Furniture'];
+
+// Bootstrap default for a brand-new item row's Min Stock (low-stock
+// threshold) — fires once, the first time an item is touched with no row
+// yet on a hotel's Inventory Items tab. Owner-tunable directly in the
+// sheet at any time; only matters at row creation. A durable/non-consumable
+// item (A.C., Mattress, Cooler, Fridge/Freezer, Microwave Oven, furniture)
+// should have its row's Min Stock set to 0 explicitly (not left blank —
+// blank falls back to this default) to opt out of low-stock alerting.
+var INVENTORY_DEFAULT_MIN_STOCK = 2;
+
+// Fixed set of item names the inventory picker offers and submitInventoryTxn
+// validates against (isKnownInventoryItem_) — same "single source of truth,
+// checked by a guard function" pattern as knownCategories_/isKnownCategory_
+// above, applied to INVENTORY_ITEMS instead of CATEGORY_RULES. `hotel` filters
+// out any hotelOnly item that doesn't belong to the caller's hotel.
+function knownInventoryItems_(hotel) {
+  return INVENTORY_ITEMS.filter(function (it) { return !it.hotelOnly || it.hotelOnly === hotel; });
+}
+
+function isKnownInventoryItem_(name, hotel) {
+  var n = String(name || '').trim().toLowerCase();
+  if (!n) return false;
+  return knownInventoryItems_(hotel).some(function (it) { return it.name.toLowerCase() === n; });
+}
+
 // Model for the on-demand "Run AI Analysis" button (AI.gs). gpt-4.1 is a
 // strong non-reasoning model that keeps the exact same Chat Completions
 // request path as before — standard "temperature", "max_completion_tokens",

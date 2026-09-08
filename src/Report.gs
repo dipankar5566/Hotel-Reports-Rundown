@@ -592,6 +592,69 @@ function exportMonthWorkbook(hotel, pin, ym) {
   }
 }
 
+/** The closing stock statement for one date, as a printable PDF — direct
+ * structural mirror of exportMonthWorkbook above, just format=pdf instead of
+ * xlsx (the Sheets export URL supports both the same way) plus print-layout
+ * params. Placed here (not Inventory.gs, which WRITES the record) because
+ * this file is this project's staff-facing PIN-gated report/export layer
+ * (getDailyReport/getDuesTracker/exportMonthWorkbook) — a PDF generator is a
+ * report, not a write. Reuses the exact DriveApp consent the owner already
+ * granted for exportMonthWorkbook; no new authorization needed. */
+function generateClosingStockPdf(hotel, pin, dateKey) {
+  verifyPin_(hotel, pin);
+  var ss = SpreadsheetApp.openById(hotelCfg_(hotel).id);
+  var sheet = ss.getSheetByName(CLOSING_STOCK_TAB_);
+  var rows = sheet ? parseClosingStockSheet_(sheet.getDataRange().getValues()) : [];
+  var groups = groupClosingStockByStatement_(rows).filter(function (g) { return g.date === dateKey; });
+  if (!groups.length) throw new Error('No closing stock submitted for ' + dateKey + '.');
+  var stmt = groups[0]; // newest submittedAt for that date — "most recent wins"
+
+  var items = stmt.items.slice().sort(function (a, b) {
+    if (a.category !== b.category) return a.category < b.category ? -1 : 1;
+    if (a.low !== b.low) return a.low ? -1 : 1; // low items first within each category
+    return a.item < b.item ? -1 : (a.item > b.item ? 1 : 0);
+  });
+
+  var tmp = SpreadsheetApp.create('Closing Stock - ' + hotel + ' ' + dateKey + ' - ' + new Date().getTime());
+  try {
+    var sh = tmp.getSheets()[0].setName('Closing Stock');
+    var title = [
+      ['Closing Stock Statement'],
+      ['Hotel', hotel],
+      ['Date', dateKey],
+      ['Submitted By', stmt.submittedBy],
+      ['Submitted At', stmt.submittedAt],
+      []
+    ];
+    sh.getRange(1, 1, title.length, 2).setValues(title.map(function (r) { return [r[0] || '', r[1] || '']; }));
+    var header = ['Item', 'Category', 'Current Stock', 'Min Stock', 'Status'];
+    var body = items.map(function (it) {
+      return [it.item, it.category, it.currentStock, it.minStock, it.low ? 'LOW' : 'OK'];
+    });
+    var data = [header].concat(body);
+    sh.getRange(title.length + 1, 1, data.length, header.length).setValues(data);
+
+    SpreadsheetApp.flush();
+    var exportUrl = 'https://docs.google.com/spreadsheets/d/' + tmp.getId() +
+      '/export?format=pdf&portrait=true&size=A4&gridlines=false&fitw=true';
+    var resp = UrlFetchApp.fetch(exportUrl, {
+      headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() },
+      muteHttpExceptions: true
+    });
+    if (resp.getResponseCode() !== 200) {
+      throw new Error('PDF export failed (HTTP ' + resp.getResponseCode() + ').');
+    }
+    var blob = resp.getBlob();
+    return {
+      filename: hotel + '_ClosingStock_' + dateKey + '.pdf',
+      base64: Utilities.base64Encode(blob.getBytes()),
+      mimeType: 'application/pdf'
+    };
+  } finally {
+    DriveApp.getFileById(tmp.getId()).setTrashed(true);
+  }
+}
+
 // Node-harness export (ignored inside GAS, where `module` is undefined).
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {

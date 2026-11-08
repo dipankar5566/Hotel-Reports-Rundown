@@ -3,7 +3,7 @@
  * with gzip'd CacheService caching (payload exceeds the 100KB plain limit).
  */
 
-var CACHE_KEY = 'dash_v18'; // v18: new top-level payload.inventory {hotel: {totalItems, lowStockCount, lowStockItems}} — live per-hotel low-stock snapshot from each book's "Inventory Items" tab (Inventory.gs); NOT month-scoped, doesn't touch months[]/entry shape at all
+var CACHE_KEY = 'dash_v19'; // v19: inventory panel now excludes retired items and includes staff-added ones. v18: new top-level payload.inventory {hotel: {totalItems, lowStockCount, lowStockItems}} — live per-hotel low-stock snapshot from each book's "Inventory Items" tab (Inventory.gs); NOT month-scoped, doesn't touch months[]/entry shape at all
 var CACHE_SECS = 600; // 10 min
 
 function getDashboardData(forceRefresh) {
@@ -67,7 +67,8 @@ function buildPayloadFromBooks_(books, errors) {
     for (var t = 0; t < h.tabs.length; t++) {
       if (h.tabs[t].name === INVENTORY_ITEMS_TAB_) { invTab = h.tabs[t]; break; }
     }
-    var stock = buildInventoryStockView_(invTab ? invTab.values : [INVENTORY_ITEMS_HEADER_], h.hotel);
+    var stock = buildInventoryStockView_(invTab ? invTab.values : [INVENTORY_ITEMS_HEADER_], h.hotel)
+      .filter(function (s) { return !s.retired; });
     var low = stock.filter(function (s) { return s.low; });
     inventory[h.hotel] = {
       totalItems: stock.length,

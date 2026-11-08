@@ -130,7 +130,25 @@
       </div>
 
       <div class="card">
-        <strong>Current stock</strong>
+        <div style="display:flex;align-items:center;gap:8px">
+          <strong class="grow" style="flex:1">Current stock</strong>
+          <button class="mini ed" id="invAddBtn">+ Add new item</button>
+        </div>
+        <div id="invAddForm" class="hidden" style="margin:10px 0;padding:10px;border:1px solid var(--line);border-radius:8px">
+          <label>Item name *</label>
+          <input id="f_new_name" type="text" maxlength="60">
+          <label>Category *</label>
+          <select id="f_new_cat"></select>
+          <input id="f_new_cat_other" type="text" maxlength="40" placeholder="New category name" class="hidden" style="margin-top:6px">
+          <label>Opening stock (optional)</label>
+          <input id="f_new_open" type="number" inputmode="decimal" min="0" placeholder="0">
+          <label>Min stock (low-stock alert level)</label>
+          <input id="f_new_min" type="number" inputmode="decimal" min="0" value="2">
+          <div style="height:12px"></div>
+          <button class="primary" id="invAddSave">Add item</button>
+          <button class="mini ed" id="invAddCancel" style="margin-top:6px">Cancel</button>
+        </div>
+        <div id="invItemPanel" class="hidden" style="margin:10px 0;padding:10px;border:1px solid var(--line);border-radius:8px"></div>
         <input id="invStockSearch" type="text" placeholder="Search items…" style="margin:8px 0">
         <div id="invStockList"><p class="muted">—</p></div>
       </div>
@@ -967,7 +985,7 @@ function buildItemSelect() {
   // entry, so this is one data source instead of two, and orphaned (retired)
   // entries are naturally excluded since they're not valid Purchase/Usage
   // targets anyway.
-  var stock = ((INV_CONFIG && INV_CONFIG.stock) || []).filter(function (s) { return !s.orphaned; });
+  var stock = ((INV_CONFIG && INV_CONFIG.stock) || []).filter(function (s) { return !s.orphaned && !s.retired; });
   var categories = (INV_CONFIG && INV_CONFIG.categories) || [];
   var count = 0;
   categories.forEach(function (cat) {
@@ -1058,23 +1076,133 @@ function renderStockList() {
   var list = (INV_CONFIG && INV_CONFIG.stock) || [];
   var q = (INV.stockSearch || '').trim().toLowerCase();
   var filtered = q ? list.filter(function (it) { return it.item.toLowerCase().indexOf(q) !== -1; }) : list;
-  if (!filtered.length) { box.innerHTML = '<p class="muted">No items.</p>'; return; }
+  var active = filtered.filter(function (it) { return !it.retired; });
+  var retired = filtered.filter(function (it) { return it.retired; });
+  if (!active.length && !retired.length) { box.innerHTML = '<p class="muted">No items.</p>'; return; }
   var byCat = {};
-  filtered.forEach(function (it) { (byCat[it.category] = byCat[it.category] || []).push(it); });
+  active.forEach(function (it) { (byCat[it.category] = byCat[it.category] || []).push(it); });
   var html = '';
+  var rowHtml = function (it) {
+    return '<div class="entry' + (it.low && !it.retired ? ' low' : '') + '" data-item="' + escapeHtml(it.item) +
+      '" style="cursor:pointer"><span class="grow">' + escapeHtml(it.item) +
+      (it.custom ? ' <span class="muted">(added)</span>' : '') +
+      (it.orphaned ? ' <span class="muted">(not in catalog)</span>' : '') +
+      '</span><span class="amt">' + it.currentStock + ' <span class="muted">/ min ' + it.minStock + '</span></span></div>';
+  };
   Object.keys(byCat).sort().forEach(function (cat) {
     var items = byCat[cat].slice().sort(function (a, b) {
       if (a.low !== b.low) return a.low ? -1 : 1; // low items first within each category
       return a.item < b.item ? -1 : (a.item > b.item ? 1 : 0);
     });
     html += '<div class="muted" style="margin-top:10px;font-weight:600">' + escapeHtml(cat) + '</div>';
-    items.forEach(function (it) {
-      html += '<div class="entry' + (it.low ? ' low' : '') + '"><span class="grow">' + escapeHtml(it.item) +
-        (it.orphaned ? ' <span class="muted">(retired)</span>' : '') + '</span><span class="amt">' +
-        it.currentStock + ' <span class="muted">/ min ' + it.minStock + '</span></span></div>';
-    });
+    items.forEach(function (it) { html += rowHtml(it); });
   });
+  if (retired.length) {
+    html += '<details style="margin-top:14px"' + (q ? ' open' : '') + '><summary class="muted" style="font-weight:600">Retired (' +
+      retired.length + ')</summary>' + retired.map(rowHtml).join('') + '</details>';
+  }
   box.innerHTML = html;
+  Array.prototype.forEach.call(box.querySelectorAll('.entry[data-item]'), function (el) {
+    el.onclick = function () { openItemPanel(el.getAttribute('data-item')); };
+  });
+}
+
+// ---- add / manage items ----
+
+function buildAddCategorySelect() {
+  var sel = $('f_new_cat'); sel.innerHTML = '';
+  ((INV_CONFIG && INV_CONFIG.categories) || []).forEach(function (c) {
+    var o = document.createElement('option'); o.value = c; o.textContent = c; sel.appendChild(o);
+  });
+  var other = document.createElement('option'); other.value = '__new__'; other.textContent = 'New category…';
+  sel.appendChild(other);
+  $('f_new_cat_other').classList.add('hidden');
+}
+$('f_new_cat').onchange = function () {
+  $('f_new_cat_other').classList.toggle('hidden', this.value !== '__new__');
+};
+$('invAddBtn').onclick = function () {
+  $('invItemPanel').classList.add('hidden');
+  var f = $('invAddForm');
+  var show = f.classList.contains('hidden');
+  f.classList.toggle('hidden', !show);
+  if (show) {
+    buildAddCategorySelect();
+    $('f_new_name').value = ''; $('f_new_open').value = ''; $('f_new_min').value = '2';
+    $('f_new_cat_other').value = '';
+    $('f_new_name').focus();
+  }
+};
+$('invAddCancel').onclick = function () { $('invAddForm').classList.add('hidden'); };
+$('invAddSave').onclick = function () {
+  var name = $('f_new_name').value.trim();
+  if (!name) { toast('Enter an item name.', true); return; }
+  var cat = $('f_new_cat').value === '__new__' ? $('f_new_cat_other').value.trim() : $('f_new_cat').value;
+  if (!cat) { toast('Pick or enter a category.', true); return; }
+  var btn = $('invAddSave'); btn.disabled = true;
+  google.script.run
+    .withSuccessHandler(function (res) {
+      btn.disabled = false;
+      toast('Added "' + res.item + '".');
+      $('invAddForm').classList.add('hidden');
+      reloadInventoryConfigQuiet();
+      loadInventoryLog();
+    })
+    .withFailureHandler(function (err) { btn.disabled = false; toast(errText(err), true); })
+    .addInventoryItem({
+      hotel: STATE.hotel, pin: STATE.pin, name: name, category: cat,
+      openingStock: $('f_new_open').value, minStock: $('f_new_min').value, enteredBy: STATE.staffName
+    });
+};
+
+// Refetch stock + categories (a new category must reach the picker and the
+// add form), then rebuild everything that reads them.
+function reloadInventoryConfigQuiet() {
+  google.script.run
+    .withSuccessHandler(function (cfg) {
+      INV_CONFIG = cfg;
+      try { buildInvFields(); renderStockList(); } catch (e) { toast('Inventory UI error: ' + e.message, true); }
+    })
+    .withFailureHandler(function (err) { toast(errText(err), true); })
+    .getInventoryConfig(STATE.hotel, STATE.pin);
+}
+
+function openItemPanel(name) {
+  var it = findStockItem(name); if (!it) return;
+  $('invAddForm').classList.add('hidden');
+  var p = $('invItemPanel'); p.classList.remove('hidden');
+  var canRetire = it.currentStock === 0;
+  p.innerHTML = '<div style="font-weight:600;margin-bottom:6px">' + escapeHtml(it.item) + ' <span class="muted">· ' +
+    escapeHtml(it.category) + ' · stock ' + it.currentStock + '</span></div>' +
+    '<label>Rename</label><input id="ip_name" type="text" maxlength="60" value="' + escapeHtml(it.item) + '">' +
+    '<button class="mini ed" id="ip_rename" style="margin-top:6px">Save name</button>' +
+    '<label>Min stock</label><input id="ip_min" type="number" inputmode="decimal" min="0" value="' + it.minStock + '">' +
+    '<button class="mini ed" id="ip_minsave" style="margin-top:6px">Save min stock</button>' +
+    '<div style="height:10px"></div>' +
+    (it.retired
+      ? '<button class="mini ed" id="ip_toggle">Unretire</button>'
+      : '<button class="mini del" id="ip_toggle"' + (canRetire ? '' : ' disabled') + '>Retire item</button>' +
+        (canRetire ? '' : '<p class="muted">Stock must be 0 to retire (record usage or a recount first).</p>')) +
+    ' <button class="mini ed" id="ip_close">Close</button>';
+  var send = function (action, extra, okMsg) {
+    var payload = { hotel: STATE.hotel, pin: STATE.pin, item: it.item, action: action };
+    for (var k in extra) payload[k] = extra[k];
+    google.script.run
+      .withSuccessHandler(function () {
+        toast(okMsg); p.classList.add('hidden');
+        reloadInventoryConfigQuiet(); loadInventoryLog();
+      })
+      .withFailureHandler(function (err) { toast(errText(err), true); })
+      .updateInventoryItem(payload);
+  };
+  $('ip_rename').onclick = function () { send('rename', { newName: $('ip_name').value }, 'Renamed.'); };
+  $('ip_minsave').onclick = function () { send('minStock', { minStock: $('ip_min').value }, 'Min stock saved.'); };
+  $('ip_toggle').onclick = function () {
+    if (it.retired) send('unretire', {}, 'Item restored.');
+    else send('retire', {}, 'Item retired.');
+  };
+  $('ip_close').onclick = function () { p.classList.add('hidden'); };
+  p.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 function loadInventoryLog() {

@@ -592,67 +592,158 @@ function exportMonthWorkbook(hotel, pin, ym) {
   }
 }
 
-/** The closing stock statement for one date, as a printable PDF — direct
- * structural mirror of exportMonthWorkbook above, just format=pdf instead of
- * xlsx (the Sheets export URL supports both the same way) plus print-layout
- * params. Placed here (not Inventory.gs, which WRITES the record) because
- * this file is this project's staff-facing PIN-gated report/export layer
- * (getDailyReport/getDuesTracker/exportMonthWorkbook) — a PDF generator is a
- * report, not a write. Reuses the exact DriveApp consent the owner already
- * granted for exportMonthWorkbook; no new authorization needed. */
+function escHtml_(v) {
+  return String(v === null || v === undefined ? '' : v).replace(/[&<>"]/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+  });
+}
+
+function stmtStamp_(d) {
+  if (!(d instanceof Date) || isNaN(d.getTime())) return '';
+  var p = function (n) { return (n < 10 ? '0' : '') + n; };
+  var mon = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return d.getDate() + ' ' + mon[d.getMonth()] + ' ' + d.getFullYear() + ', ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+
+/** Pure: one closing-stock statement -> a self-contained, print-styled HTML
+ * page (A4 portrait). stmt = a groupClosingStockByStatement_ entry; prev = the
+ * previous statement's group or null; logoDataUri '' for a name-only header.
+ * Table-based layout + inline-safe CSS only: Apps Script's HTML->PDF converter
+ * is an old renderer (no flex/grid). Movement columns appear only when the
+ * statement carries them (stmt.logRow != null); legacy statements get the
+ * plain balance table. */
+function buildClosingStockHtml_(stmt, prev, hotel, logoDataUri, generatedAt) {
+  var hasMv = stmt.logRow !== null && stmt.logRow !== undefined;
+  var items = stmt.items.slice();
+  var status = function (it) { return it.low ? (it.currentStock <= 0 ? 'OUT' : 'LOW') : 'OK'; };
+  var nLow = items.filter(function (i) { return status(i) === 'LOW'; }).length;
+  var nOut = items.filter(function (i) { return status(i) === 'OUT'; }).length;
+  var sumPur = 0, sumUse = 0;
+  items.forEach(function (i) { sumPur += i.purchased || 0; sumUse += i.used || 0; });
+  var cell = function (v) { return v === null || v === undefined ? '&mdash;' : escHtml_(v); };
+
+  var catOrder = INVENTORY_CATEGORIES.slice();
+  var byCat = {};
+  items.forEach(function (i) { (byCat[i.category] = byCat[i.category] || []).push(i); });
+  Object.keys(byCat).sort().forEach(function (c) { if (catOrder.indexOf(c) === -1) catOrder.push(c); });
+
+  var period = prev
+    ? 'Period: ' + escHtml_(stmtStamp_(prev.submittedAt)) + ' &ndash; ' + escHtml_(stmtStamp_(stmt.submittedAt))
+    : 'First statement on record';
+
+  var h = '<!DOCTYPE html><html><head><meta charset="utf-8"><style>' +
+    '@page{size:A4;margin:12mm}' +
+    'body{font-family:Arial,Helvetica,sans-serif;color:#1c1917;font-size:10px;margin:0}' +
+    'table{border-collapse:collapse;width:100%}' +
+    '.hdr td{vertical-align:middle;padding:0}' +
+    '.brand{font-size:20px;font-weight:bold;color:#0f4c5c}' +
+    '.sub{font-size:12px;color:#44403c}' +
+    '.rule{border-top:3px solid #0f4c5c;margin:8px 0 10px}' +
+    '.sum td{border:1px solid #d6d3d1;background:#f5f5f4;padding:6px 8px;text-align:center;width:20%}' +
+    '.sum .n{font-size:16px;font-weight:bold;display:block}' +
+    '.sum .l{font-size:8px;color:#57534e;text-transform:uppercase}' +
+    '.sum .bad .n{color:#b91c1c}' +
+    '.alert{border:2px solid #b91c1c;background:#fef2f2;padding:6px 8px;margin:10px 0}' +
+    '.alert b{color:#b91c1c}' +
+    'table.t th{background:#0f4c5c;color:#fff;font-size:9px;padding:5px 6px;text-align:right}' +
+    'table.t th.l,table.t td.l{text-align:left}' +
+    'table.t td{padding:4px 6px;text-align:right;border-bottom:1px solid #e7e5e4}' +
+    'table.t tr.band td{background:#dbe7ea;color:#0f4c5c;font-weight:bold;font-size:10px;text-align:left;border-bottom:1px solid #0f4c5c}' +
+    'table.t tr.alt td{background:#fafaf9}' +
+    'table.t tr.low td{background:#fdecec}' +
+    '.st-low{color:#b91c1c;font-weight:bold}' +
+    '.st-ok{color:#15803d}' +
+    '.sig td{padding-top:34px;width:50%;font-size:10px}' +
+    '.sigline{border-top:1px solid #1c1917;display:block;width:80%;margin-bottom:3px}' +
+    '.foot{color:#78716c;font-size:8px;margin-top:10px}' +
+    '</style></head><body>';
+
+  h += '<table class="hdr"><tr>';
+  if (logoDataUri) h += '<td style="width:70px"><img src="' + logoDataUri + '" style="height:56px;width:auto"></td>';
+  h += '<td><div class="brand">Hotel ' + escHtml_(hotel) + '</div><div class="sub">Closing Stock Statement</div></td>' +
+    '<td style="text-align:right"><div class="sub"><b>' + escHtml_(stmt.date) + '</b></div>' +
+    '<div style="color:#57534e">' + period + '</div></td></tr></table><div class="rule"></div>';
+
+  var cards = [['Items', items.length, ''], ['Low', nLow, nLow ? 'bad' : ''], ['Out of stock', nOut, nOut ? 'bad' : '']];
+  if (hasMv) { cards.push(['Purchased (units)', sumPur, '']); cards.push(['Used (units)', sumUse, '']); }
+  h += '<table class="sum"><tr>' + cards.map(function (c) {
+    return '<td class="' + c[2] + '"><span class="n">' + escHtml_(c[1]) + '</span><span class="l">' + escHtml_(c[0]) + '</span></td>';
+  }).join('') + '</tr></table>';
+  h += '<div style="margin-top:4px;color:#57534e">Submitted by <b>' + escHtml_(stmt.submittedBy || '-') + '</b> on ' +
+    escHtml_(stmtStamp_(stmt.submittedAt)) + '</div>';
+
+  var attention = items.filter(function (i) { return status(i) !== 'OK'; });
+  if (attention.length) {
+    h += '<div class="alert"><b>Needs attention (' + attention.length + '):</b> ' + attention.map(function (i) {
+      return escHtml_(i.item) + ' <span style="color:#57534e">(' + escHtml_(i.currentStock) + '/' + escHtml_(i.minStock) + ')</span>';
+    }).join(' &bull; ') + '</div>';
+  }
+
+  h += '<table class="t" style="margin-top:8px"><thead><tr><th class="l">Item</th>' +
+    (hasMv ? '<th>Opening</th><th>Purchased</th><th>Used</th><th>Adjusted</th>' : '') +
+    '<th>Closing</th><th>Min</th><th>Status</th></tr></thead><tbody>';
+  catOrder.forEach(function (cat) {
+    var list = byCat[cat];
+    if (!list || !list.length) return;
+    list.sort(function (a, b) {
+      var la = status(a) !== 'OK', lb = status(b) !== 'OK';
+      if (la !== lb) return la ? -1 : 1;
+      return a.item < b.item ? -1 : (a.item > b.item ? 1 : 0);
+    });
+    h += '<tr class="band"><td colspan="' + (hasMv ? 8 : 4) + '">' + escHtml_(cat) + ' (' + list.length + ')</td></tr>';
+    list.forEach(function (i, n) {
+      var st = status(i);
+      h += '<tr class="' + (st !== 'OK' ? 'low' : (n % 2 ? 'alt' : '')) + '"><td class="l">' + escHtml_(i.item) + '</td>' +
+        (hasMv ? '<td>' + cell(i.opening) + '</td><td>' + cell(i.purchased) + '</td><td>' + cell(i.used) + '</td><td>' +
+          cell(i.adjusted === null || i.adjusted === undefined ? null : (i.adjusted > 0 ? '+' + i.adjusted : i.adjusted)) + '</td>' : '') +
+        '<td><b>' + escHtml_(i.currentStock) + '</b></td><td>' + escHtml_(i.minStock) + '</td>' +
+        '<td class="' + (st === 'OK' ? 'st-ok' : 'st-low') + '">' + st + '</td></tr>';
+    });
+  });
+  h += '</tbody></table>';
+
+  h += '<table class="sig"><tr><td><span class="sigline"></span>Prepared by: ' + escHtml_(stmt.submittedBy || '') +
+    '</td><td><span class="sigline"></span>Checked by</td></tr></table>';
+  h += '<div class="foot">Generated ' + escHtml_(stmtStamp_(generatedAt || new Date())) +
+    (hasMv ? ' &middot; Adjusted = recounts and corrections (Closing &minus; Opening &minus; Purchased + Used)' : '') + '</div>';
+  return h + '</body></html>';
+}
+
+/** Logo as a data: URI, or '' (name-only header) when unset/unreadable. */
+function loadLogoDataUri_(hotel) {
+  var id = (HOTEL_LOGO_FILE_ID || {})[hotel];
+  if (!id) return '';
+  try {
+    var blob = DriveApp.getFileById(id).getBlob();
+    return 'data:' + blob.getContentType() + ';base64,' + Utilities.base64Encode(blob.getBytes());
+  } catch (e) {
+    return '';
+  }
+}
+
+/** The closing stock statement for one date, as a styled PDF. HTML ->
+ * Utilities blob -> PDF: no temp spreadsheet, no UrlFetchApp, nothing to
+ * trash. Lives here (not Inventory.gs, which WRITES the record) because this
+ * is the PIN-gated staff report/export layer. */
 function generateClosingStockPdf(hotel, pin, dateKey) {
   verifyPin_(hotel, pin);
   var ss = SpreadsheetApp.openById(hotelCfg_(hotel).id);
   var sheet = ss.getSheetByName(CLOSING_STOCK_TAB_);
   var rows = sheet ? parseClosingStockSheet_(sheet.getDataRange().getValues()) : [];
-  var groups = groupClosingStockByStatement_(rows).filter(function (g) { return g.date === dateKey; });
-  if (!groups.length) throw new Error('No closing stock submitted for ' + dateKey + '.');
-  var stmt = groups[0]; // newest submittedAt for that date — "most recent wins"
+  var all = groupClosingStockByStatement_(rows); // newest first
+  var pos = -1;
+  for (var i = 0; i < all.length; i++) { if (all[i].date === dateKey) { pos = i; break; } }
+  if (pos === -1) throw new Error('No closing stock submitted for ' + dateKey + '.');
+  var stmt = all[pos];            // newest submission for that date
+  var prev = all[pos + 1] || null; // the one before it, for the period label
 
-  var items = stmt.items.slice().sort(function (a, b) {
-    if (a.category !== b.category) return a.category < b.category ? -1 : 1;
-    if (a.low !== b.low) return a.low ? -1 : 1; // low items first within each category
-    return a.item < b.item ? -1 : (a.item > b.item ? 1 : 0);
-  });
-
-  var tmp = SpreadsheetApp.create('Closing Stock - ' + hotel + ' ' + dateKey + ' - ' + new Date().getTime());
-  try {
-    var sh = tmp.getSheets()[0].setName('Closing Stock');
-    var title = [
-      ['Closing Stock Statement'],
-      ['Hotel', hotel],
-      ['Date', dateKey],
-      ['Submitted By', stmt.submittedBy],
-      ['Submitted At', stmt.submittedAt],
-      []
-    ];
-    sh.getRange(1, 1, title.length, 2).setValues(title.map(function (r) { return [r[0] || '', r[1] || '']; }));
-    var header = ['Item', 'Category', 'Current Stock', 'Min Stock', 'Status'];
-    var body = items.map(function (it) {
-      return [it.item, it.category, it.currentStock, it.minStock, it.low ? 'LOW' : 'OK'];
-    });
-    var data = [header].concat(body);
-    sh.getRange(title.length + 1, 1, data.length, header.length).setValues(data);
-
-    SpreadsheetApp.flush();
-    var exportUrl = 'https://docs.google.com/spreadsheets/d/' + tmp.getId() +
-      '/export?format=pdf&portrait=true&size=A4&gridlines=false&fitw=true';
-    var resp = UrlFetchApp.fetch(exportUrl, {
-      headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() },
-      muteHttpExceptions: true
-    });
-    if (resp.getResponseCode() !== 200) {
-      throw new Error('PDF export failed (HTTP ' + resp.getResponseCode() + ').');
-    }
-    var blob = resp.getBlob();
-    return {
-      filename: hotel + '_ClosingStock_' + dateKey + '.pdf',
-      base64: Utilities.base64Encode(blob.getBytes()),
-      mimeType: 'application/pdf'
-    };
-  } finally {
-    DriveApp.getFileById(tmp.getId()).setTrashed(true);
-  }
+  var html = buildClosingStockHtml_(stmt, prev, hotel, loadLogoDataUri_(hotel), new Date());
+  var blob = Utilities.newBlob(html, 'text/html', 'closing.html').getAs('application/pdf');
+  return {
+    filename: hotel + '_ClosingStock_' + dateKey + '.pdf',
+    base64: Utilities.base64Encode(blob.getBytes()),
+    mimeType: 'application/pdf'
+  };
 }
 
 // Node-harness export (ignored inside GAS, where `module` is undefined).
@@ -663,6 +754,6 @@ if (typeof module !== 'undefined' && module.exports) {
     recoveredAgainstDue_: recoveredAgainstDue_, canDeleteDue_: canDeleteDue_,
     canRecoverAmount_: canRecoverAmount_, buildDuesLedger_: buildDuesLedger_,
     buildExportRows_: buildExportRows_, findMonthSheet_: findMonthSheet_,
-    exportMonthWorkbook: exportMonthWorkbook
+    exportMonthWorkbook: exportMonthWorkbook, buildClosingStockHtml_: buildClosingStockHtml_
   };
 }

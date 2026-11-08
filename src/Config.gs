@@ -281,3 +281,8 @@ var AI_MAX_EXPENSE_ROWS = 400;
 // snapshots to feed the AI so it can read trends and give an early-warning
 // forecast. Mirrored client-side as AI_TREND_MONTHS in Index.html.
 var AI_TREND_MONTHS = 6;
+
+// Drive file ID of each hotel's logo (PNG/JPG), shown in the closing stock PDF
+// header. Leave '' for a name-only header. Owner: upload the image to Drive,
+// copy the ID from its share link, paste it here.
+var HOTEL_LOGO_FILE_ID = { Dream: '', Paradise: '' };

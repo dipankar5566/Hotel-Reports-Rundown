@@ -23,13 +23,17 @@ A Google Apps Script (GAS) web app that reads two staff-maintained Google Sheets
     │                    the rent/food/expense + recovery sections.
     ├── Inventory.gs     Staff-PWA stock tracking (linens/supplies/amenities),
     │                    PIN-gated. Two per-hotel tabs (Inventory Items/Log,
-    │                    not month tabs) hold a live running balance; catalog
-    │                    is Config.gs's INVENTORY_ITEMS. No cost/money —
+    │                    not month tabs) hold a live running balance; seed
+    │                    catalog is Config.gs's INVENTORY_ITEMS, and staff can
+    │                    add/rename/retire items per hotel. Closing Stock tab
+    │                    freezes daily statements with period movement. No cost/money —
     │                    pure quantity, isolated from Aggregate.gs's P&L math
     │                    except a small additive low-stock summary.
     ├── Report.gs        Staff-dashboard reader (PIN-gated): getDailyReport (per-day
     │                    rent/food/expense/recovery for a month) + getDuesTracker
     │                    (per-party dues: incurred vs recovered, month/year/lifetime).
+    │                    Also exportMonthWorkbook (xlsx) and generateClosingStockPdf
+    │                    (styled HTML -> PDF, buildClosingStockHtml_).
     │                    Pure cores over fetched values; reuses Parser helpers.
     ├── Main.gs          doGet() -> Index.html (dashboard, gated by DASHBOARD_TOKEN
     │                    + a DASHBOARD_ALLOWED_EMAILS identity allowlist) or

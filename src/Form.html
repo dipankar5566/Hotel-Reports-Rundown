@@ -60,6 +60,8 @@
   #duePicker { margin-bottom:14px; padding-bottom:10px; border-bottom:1px dashed var(--line); }
   #dueResults { max-height:220px; overflow-y:auto; }
   #dueResults .party { padding:8px 0; }
+  #invResults { max-height:260px; overflow-y:auto; }
+  #invResults .party { padding:8px 0; cursor:pointer; }
   #dueLinked { padding:8px 0; font-size:13px; color:var(--muted); }
   #dueLinked a { color:var(--teal); font-weight:600; }
   .entry.low { background:#fef2f2; margin:0 -16px; padding:10px 16px; }
@@ -973,21 +975,103 @@ function buildInvFields() {
 // reported they couldn't find/use — its renderItemResults only showed the
 // first 25 items until you typed a matching search term, so most of the
 // catalog was effectively invisible.
+//
+// A search box sits above the select and only NARROWS its options (empty box
+// = full list, same as before). It deliberately does not replace the select —
+// see the failed search-only picker above.
 function buildItemSelect() {
   var box = $('invFields');
   var lab = document.createElement('label'); lab.textContent = 'Item *';
+  var search = document.createElement('input');
+  search.type = 'search'; search.id = 'f_inv_search';
+  search.placeholder = 'Search item or category…';
+  search.setAttribute('autocomplete', 'off');
+  // Native selects can't be popped open from script on Android, so typing
+  // alone looked like "search does nothing". Matches show live as a tappable
+  // list right under the box; the select below stays as a filtered backup.
+  var results = document.createElement('div'); results.id = 'invResults';
   var sel = document.createElement('select'); sel.id = 'f_inv_item';
+  sel.onchange = function () {
+    results.innerHTML = '';
+    if (INV.type === 'Recount') updateRecountHint();
+  };
+  search.oninput = function () { fillItemOptions(sel, this.value); renderItemMatches(this.value); };
+  fillItemOptions(sel, '');
+  box.insertBefore(sel, box.firstChild);
+  box.insertBefore(results, sel);
+  box.insertBefore(search, results);
+  box.insertBefore(lab, search);
+}
+
+// Active (non-retired, non-orphaned) stock in dropdown order: category order
+// from INV_CONFIG.categories, then sheet order within a category. Shared by
+// the dropdown and the tap-list so they never disagree.
+function activeInvStock() {
+  var all = ((INV_CONFIG && INV_CONFIG.stock) || []).filter(function (s) { return !s.orphaned && !s.retired; });
+  var out = [];
+  ((INV_CONFIG && INV_CONFIG.categories) || []).forEach(function (cat) {
+    all.forEach(function (s) { if (s.category === cat) out.push(s); });
+  });
+  return out;
+}
+
+function renderItemMatches(query) {
+  var results = $('invResults'); if (!results) return;
+  var q = String(query || '').trim().toLowerCase();
+  results.innerHTML = '';
+  if (!q) return;
+  var matches = activeInvStock().filter(function (s) { return matchesItemQuery(s, q); });
+  if (!matches.length) {
+    results.innerHTML = '<p class="muted" style="margin:4px 0">No items match.</p>';
+    return;
+  }
+  matches.forEach(function (s) {
+    var row = document.createElement('div'); row.className = 'party';
+    row.innerHTML = '<div class="top"><span class="nm">' + escapeHtml(s.item) +
+      ' <span class="muted" style="font-size:12px">· ' + escapeHtml(s.category || '') + '</span></span>' +
+      '<span class="ob"' + (s.low ? ' style="color:var(--danger)"' : '') + '>stock ' + escapeHtml(String(s.currentStock)) +
+      (s.low ? ' LOW' : '') + '</span></div>';
+    row.onclick = function () { pickInvItem(s); };
+    results.appendChild(row);
+  });
+}
+
+function pickInvItem(s) {
+  var search = $('f_inv_search'), sel = $('f_inv_item');
+  search.value = s.item;
+  fillItemOptions(sel, s.item);
+  sel.value = s.item;
+  $('invResults').innerHTML = '';
+  if (INV.type === 'Recount') updateRecountHint();
+  if ($('f_inv_qty')) $('f_inv_qty').focus();
+}
+
+// Case-insensitive substring match on item name or category name.
+function matchesItemQuery(s, q) {
+  if (!q) return true;
+  return String(s.item || '').toLowerCase().indexOf(q) !== -1 ||
+    String(s.category || '').toLowerCase().indexOf(q) !== -1;
+}
+
+// (Re)builds the item select's options filtered by `query`. Keeps the current
+// selection if it still matches; never auto-selects a single match (owner
+// wants staff to always tap the item explicitly).
+function fillItemOptions(sel, query) {
+  var q = String(query || '').trim().toLowerCase();
+  var prev = sel.value;
+  while (sel.firstChild) sel.removeChild(sel.firstChild);
   var blank = document.createElement('option');
-  blank.value = ''; blank.disabled = true; blank.selected = true; blank.textContent = 'Select an item…';
+  blank.value = ''; blank.disabled = true; blank.textContent = 'Select an item…';
   sel.appendChild(blank);
   // Built from INV_CONFIG.stock (not the separate .items field) — stock
   // already carries {item, category, currentStock, low} for every catalog
   // entry, so this is one data source instead of two, and orphaned (retired)
   // entries are naturally excluded since they're not valid Purchase/Usage
   // targets anyway.
-  var stock = ((INV_CONFIG && INV_CONFIG.stock) || []).filter(function (s) { return !s.orphaned && !s.retired; });
+  var all = activeInvStock();
+  var stock = all.filter(function (s) { return matchesItemQuery(s, q); });
   var categories = (INV_CONFIG && INV_CONFIG.categories) || [];
-  var count = 0;
+  var count = 0, kept = false;
   categories.forEach(function (cat) {
     var inCat = stock.filter(function (s) { return s.category === cat; });
     if (!inCat.length) return;
@@ -996,20 +1080,20 @@ function buildItemSelect() {
       var o = document.createElement('option');
       o.value = s.item;
       o.textContent = s.item + ' — stock: ' + s.currentStock + (s.low ? ' (LOW)' : '');
+      if (prev && s.item === prev) { o.selected = true; kept = true; }
       grp.appendChild(o);
       count++;
     });
     sel.appendChild(grp);
   });
+  if (!kept) blank.selected = true;
   if (!count) {
     var warn = document.createElement('option');
     warn.value = ''; warn.disabled = true;
-    warn.textContent = 'No items loaded — try reloading the page';
+    warn.textContent = all.length ? 'No items match "' + q + '"' : 'No items loaded — try reloading the page';
     sel.appendChild(warn);
   }
-  sel.onchange = function () { if (INV.type === 'Recount') updateRecountHint(); };
-  box.insertBefore(sel, box.firstChild);
-  box.insertBefore(lab, sel);
+  if (prev && !kept && INV.type === 'Recount') updateRecountHint();
 }
 
 // Live "system shows N — this will log a delta of ±M" feedback, mirrors

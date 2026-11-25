@@ -162,6 +162,37 @@ function getAiResponseSchema_() {
     schema: {
       type: 'object',
       properties: {
+        headline: {
+          type: 'string',
+          description: 'A punchy verdict of at most 12 words for the infographic title (e.g. "Strong revenue, but costs are eating the margin"). No numbers that are not in the data.'
+        },
+        healthScore: {
+          type: 'integer',
+          description: 'Overall business health 0-100 for this scope and month. Rubric: 80-100 healthy (positive net margin, stable/rising trend), 50-79 mixed, 0-49 poor (net negative or sharply worsening).'
+        },
+        outlook: {
+          type: 'string',
+          enum: ['improving', 'steady', 'declining'],
+          description: 'Direction of the multi-month trend. Use steady when history is under 3 months or movement is within noise.'
+        },
+        outlookNote: {
+          type: 'string',
+          description: 'One short line (max 14 words) explaining the outlook.'
+        },
+        scorecard: {
+          type: 'array',
+          description: 'Exactly one entry per metric: revenue, totalCost, net, occupancy, adr, revpar. Judges how that metric is doing; the numbers themselves are shown by the app, so do not repeat them.',
+          items: {
+            type: 'object',
+            properties: {
+              metric: { type: 'string', enum: ['revenue', 'totalCost', 'net', 'occupancy', 'adr', 'revpar'] },
+              status: { type: 'string', enum: ['good', 'watch', 'bad'] },
+              note: { type: 'string', description: 'At most 8 words.' }
+            },
+            required: ['metric', 'status', 'note'],
+            additionalProperties: false
+          }
+        },
         summary: {
           type: 'string',
           description: 'A 3-5 sentence plain-English narrative of this month\'s P&L performance for a small hotel owner, referencing concrete figures including the operating KPIs (occupancy, ADR, RevPAR, GST, dues) where present.'
@@ -178,9 +209,12 @@ function getAiResponseSchema_() {
             properties: {
               priority: { type: 'string', enum: ['high', 'medium', 'low'] },
               action: { type: 'string', description: 'The specific action to take, in plain language.' },
-              rationale: { type: 'string', description: 'Why, referencing concrete figures from the data.' }
+              rationale: { type: 'string', description: 'Why, referencing concrete figures from the data.' },
+              shortAction: { type: 'string', description: 'The action in at most 6 words, for a chart label.' },
+              impact: { type: 'string', enum: ['high', 'low'], description: 'Expected effect on net profit.' },
+              effort: { type: 'string', enum: ['low', 'high'], description: 'Work or cost needed to do it.' }
             },
-            required: ['priority', 'action', 'rationale'],
+            required: ['priority', 'action', 'rationale', 'shortAction', 'impact', 'effort'],
             additionalProperties: false
           }
         },
@@ -202,7 +236,7 @@ function getAiResponseSchema_() {
           }
         }
       },
-      required: ['summary', 'trend', 'recommendations', 'anomalies'],
+      required: ['headline', 'healthScore', 'outlook', 'outlookNote', 'scorecard', 'summary', 'trend', 'recommendations', 'anomalies'],
       additionalProperties: false
     }
   };
@@ -219,6 +253,7 @@ function buildOpenAiRequest_(compact) {
     'Task 4 - anomalies: review ONLY the "expenseLineItems" array and flag entries that look like possible bookkeeping mistakes. Judge outliers against that category\'s baseline in "categoryStats" (count/mean/max/stddev) - e.g. an amount far above the category mean, likely-duplicate entries on the same day/amount, or a particular that does not match its assigned category. Do not put rent/food-revenue or category-level trend commentary here - that belongs in summary/trend.',
     'If nothing looks anomalous, return an empty anomalies array. Never invent an anomaly to fill the list.',
     '"revenueRemarks" are free-text notes staff attached to individual rent/food rows (e.g. reason for a discount, an advance taken, a guest complaint). Use them ONLY to enrich the summary and recommendations - never place them in the anomalies array (that array is expense line-items only).',
+    'Task 5 - infographic fields: headline (max 12 words), healthScore (0-100 per the schema rubric), outlook + outlookNote (from the trend array), scorecard (exactly one entry for each of revenue, totalCost, net, occupancy, adr, revpar, judged against previous/trend), and for every recommendation a shortAction (max 6 words), impact and effort. These feed a graphic, so keep every label short and never put new figures in them.',
     'Use ONLY the numbers present in the JSON provided. Never invent, estimate, or assume a figure that is not given. If "previous" is null, do not fabricate a month-over-month comparison.',
     'Output must strictly match the provided JSON schema.'
   ].join(' ');
@@ -226,7 +261,7 @@ function buildOpenAiRequest_(compact) {
   return {
     model: AI_MODEL,
     temperature: 0.3,
-    max_completion_tokens: 2000,
+    max_completion_tokens: 3000,
     messages: [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: JSON.stringify(compact) }
@@ -262,5 +297,5 @@ function callOpenAi_(requestBody, apiKey) {
   if (!msgObj) throw new Error('OpenAI returned an unexpected response shape.');
   if (msgObj.refusal) throw new Error('OpenAI declined to analyze this data: ' + msgObj.refusal);
 
-  return JSON.parse(msgObj.content); // { summary, anomalies }
+  return JSON.parse(msgObj.content); // full schema: see getAiResponseSchema_
 }
